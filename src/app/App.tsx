@@ -162,26 +162,30 @@ export default function App() {
       .on(
         "postgres_changes",
         {
-          event: "UPDATE",
+          event: "*", // Listen to all events: INSERT, UPDATE, DELETE
           schema: "public",
           table: "architecture_data",
-          filter: "id=eq.main",
         },
         (payload) => {
           console.log("Real-time update received:", payload);
-          const newData = payload.new as { data: ArchitectureData; connections: Connection[] };
-          if (newData.data) {
-            setData(parseDates(newData.data));
+          if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
+            const newData = payload.new as { data: ArchitectureData; connections: Connection[] };
+            if (newData.data) {
+              setData(parseDates(newData.data));
+            }
+            if (newData.connections) {
+              setConnections(newData.connections);
+            }
+            setSaveStatus("realtime");
+            setTimeout(() => setSaveStatus(""), 2000);
           }
-          if (newData.connections) {
-            setConnections(newData.connections);
-          }
-          setSaveStatus("realtime");
-          setTimeout(() => setSaveStatus(""), 2000);
         }
       )
       .subscribe((status) => {
         console.log("Realtime subscription status:", status);
+        if (status === "SUBSCRIBED") {
+          console.log("✅ Real-time is connected!");
+        }
       });
 
     // Cleanup
