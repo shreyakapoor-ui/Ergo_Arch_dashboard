@@ -8,7 +8,6 @@ import { initialArchitectureData } from "./data/initialArchitecture";
 import { ArchitectureNode } from "./components/ArchitectureNode";
 import { DetailPanel } from "./components/DetailPanel";
 import { ArchitectureControls } from "./components/ArchitectureControls";
-import { Legend } from "./components/Legend";
 import { DiagramViewer } from "./components/DiagramViewer";
 import { Button } from "./components/ui/button";
 import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff, Users } from "lucide-react";
@@ -702,7 +701,6 @@ export default function App() {
         </div>
       </div>
 
-      <Legend components={data.components} />
 
       <DetailPanel
         node={selectedNode}
