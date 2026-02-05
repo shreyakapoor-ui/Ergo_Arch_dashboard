@@ -498,33 +498,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Save Status */}
-      {saveStatus && (
-        <div
-          className={`fixed top-[80px] right-6 z-50 px-4 py-2 rounded-lg shadow text-sm flex items-center gap-2 ${
-            saveStatus === "synced" || saveStatus === "realtime"
-              ? "bg-green-100 text-green-800"
-              : saveStatus === "offline"
-              ? "bg-yellow-100 text-yellow-800"
-              : "bg-blue-100 text-blue-800"
-          }`}
-        >
-          {saveStatus === "saving" && (
-            <RefreshCw className="h-4 w-4 animate-spin" />
-          )}
-          {(saveStatus === "synced" || saveStatus === "realtime") && (
-            <Cloud className="h-4 w-4" />
-          )}
-          {saveStatus === "offline" && <CloudOff className="h-4 w-4" />}
-          {saveStatus === "saving"
-            ? "Syncing..."
-            : saveStatus === "synced"
-            ? "Synced ✓"
-            : saveStatus === "realtime"
-            ? "Updated from team!"
-            : "Saved locally"}
-        </div>
-      )}
 
       {/* Toolbar - moved to left side, higher up to not overlap with anything */}
       <div className="fixed bottom-6 left-6 z-40 flex flex-col gap-2 bg-white/90 p-2 rounded-lg shadow-lg">
