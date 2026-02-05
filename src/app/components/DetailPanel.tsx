@@ -97,6 +97,51 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
     return matches ? matches.map((m) => m.substring(1)) : [];
   };
 
+  // Helper to render text with proper formatting (line breaks, bullets, paragraphs)
+  const FormattedText = ({ text, className = '' }: { text: string; className?: string }) => {
+    if (!text) return null;
+
+    // Split into lines and render with proper formatting
+    const lines = text.split('\n');
+
+    return (
+      <div className={`text-sm leading-relaxed ${className}`}>
+        {lines.map((line, i) => {
+          const trimmedLine = line.trim();
+
+          // Empty line = paragraph break
+          if (!trimmedLine) {
+            return <div key={i} className="h-2" />;
+          }
+
+          // Bullet point lines (-, *, •)
+          if (/^[-*•]\s/.test(trimmedLine)) {
+            return (
+              <div key={i} className="flex gap-2 ml-2">
+                <span className="text-gray-400">•</span>
+                <span>{trimmedLine.replace(/^[-*•]\s*/, '')}</span>
+              </div>
+            );
+          }
+
+          // Numbered list (1., 2., etc.)
+          const numberedMatch = trimmedLine.match(/^(\d+)[.)]\s*(.*)/);
+          if (numberedMatch) {
+            return (
+              <div key={i} className="flex gap-2 ml-2">
+                <span className="text-gray-400 min-w-[1.5rem]">{numberedMatch[1]}.</span>
+                <span>{numberedMatch[2]}</span>
+              </div>
+            );
+          }
+
+          // Regular line
+          return <p key={i}>{line}</p>;
+        })}
+      </div>
+    );
+  };
+
   const getStatusBadgeColor = () => {
     switch (node.status) {
       case 'built':
@@ -317,7 +362,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
               </div>
             </div>
           ) : (
-            <p className="text-sm leading-relaxed">{node.description}</p>
+            <FormattedText text={node.description} />
           )}
         </section>
 
@@ -469,9 +514,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
               </div>
             </div>
           ) : (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
-              {node.workDone || 'No work documented yet'}
-            </p>
+            <FormattedText text={node.workDone || 'No work documented yet'} />
           )}
         </section>
 
@@ -506,9 +549,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
               </div>
             </div>
           ) : (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
-              {node.inDevelopment || 'Nothing currently in development'}
-            </p>
+            <FormattedText text={node.inDevelopment || 'Nothing currently in development'} />
           )}
         </section>
 
@@ -543,9 +584,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
               </div>
             </div>
           ) : (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
-              {node.blocker || 'No blockers'}
-            </p>
+            <FormattedText text={node.blocker || 'No blockers'} />
           )}
         </section>
 
@@ -673,7 +712,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                       </Button>
                     </div>
                   </div>
-                  <p className="text-gray-700 leading-relaxed">{comment.text}</p>
+                  <FormattedText text={comment.text} className="text-gray-700" />
                   {comment.mentions.length > 0 && (
                     <div className="flex gap-1 mt-2">
                       {comment.mentions.map((mention) => (
