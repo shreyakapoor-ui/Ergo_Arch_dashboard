@@ -14,6 +14,7 @@ import { Button } from "./components/ui/button";
 import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff, Users } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
 import { AddNodeDialog } from "./components/AddNodeDialog";
+import { PasswordGate } from "./components/PasswordGate";
 import { createClient } from "@supabase/supabase-js";
 
 // ===========================================
@@ -95,6 +96,11 @@ function loadLocalConnections(): Connection[] {
 }
 
 export default function App() {
+  // Check if already authenticated
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return sessionStorage.getItem('arch-authenticated') === 'true';
+  });
+
   const [data, setData] = useState<ArchitectureData>(loadLocalData);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [showStatusOverlay, setShowStatusOverlay] = useState(true);
@@ -114,6 +120,11 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
+
+  // Show password gate if not authenticated
+  if (!isAuthenticated) {
+    return <PasswordGate onSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
