@@ -1,7 +1,7 @@
 import { Tag, MilestoneView } from '../types/architecture';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Eye, EyeOff, Filter, Milestone, X, FileImage } from 'lucide-react';
+import { Eye, EyeOff, Filter, Milestone, X, FileImage, Map } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
@@ -16,6 +16,7 @@ interface ArchitectureControlsProps {
   onSelectMilestone: (milestoneId: string | null) => void;
   activeMilestone: string | null;
   onShowDiagram: () => void;
+  onShowRoadmap: () => void;
 }
 
 export function ArchitectureControls({
@@ -29,6 +30,7 @@ export function ArchitectureControls({
   onSelectMilestone,
   activeMilestone,
   onShowDiagram,
+  onShowRoadmap,
 }: ArchitectureControlsProps) {
   const activeMilestoneObj = milestones.find((m) => m.id === activeMilestone);
 
@@ -49,6 +51,15 @@ export function ArchitectureControls({
               className="bg-blue-50 border-blue-300 hover:bg-blue-100"
             >
               <FileImage className="h-4 w-4 mr-2" /> View Official Diagram
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onShowRoadmap}
+              className="bg-purple-50 border-purple-300 hover:bg-purple-100"
+            >
+              <Map className="h-4 w-4 mr-2" /> Roadmap
             </Button>
 
             <Button

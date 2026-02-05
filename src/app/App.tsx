@@ -9,6 +9,7 @@ import { ArchitectureNode } from "./components/ArchitectureNode";
 import { DetailPanel } from "./components/DetailPanel";
 import { ArchitectureControls } from "./components/ArchitectureControls";
 import { DiagramViewer } from "./components/DiagramViewer";
+import { RoadmapViewer } from "./components/RoadmapViewer";
 import { Button } from "./components/ui/button";
 import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff, Users } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
@@ -106,6 +107,7 @@ export default function App() {
   const [activeFilterTags, setActiveFilterTags] = useState<string[]>([]);
   const [activeMilestone, setActiveMilestone] = useState<string | null>(null);
   const [showDiagram, setShowDiagram] = useState(false);
+  const [showRoadmap, setShowRoadmap] = useState(false);
   const [connections, setConnections] = useState<Connection[]>(loadLocalConnections);
   const [connectionMode, setConnectionMode] = useState(false);
   const [connectionStart, setConnectionStart] = useState<string | null>(null);
@@ -482,6 +484,7 @@ export default function App() {
         onSelectMilestone={handleSelectMilestone}
         activeMilestone={activeMilestone}
         onShowDiagram={() => setShowDiagram(true)}
+        onShowRoadmap={() => setShowRoadmap(true)}
       />
 
       {/* Connection Mode Banner */}
@@ -696,6 +699,11 @@ export default function App() {
       <DiagramViewer
         isOpen={showDiagram}
         onClose={() => setShowDiagram(false)}
+      />
+
+      <RoadmapViewer
+        isOpen={showRoadmap}
+        onClose={() => setShowRoadmap(false)}
       />
 
       <AddArrowDialog
