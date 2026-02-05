@@ -527,17 +527,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Real-time indicator */}
-      <div className="fixed top-[80px] left-6 z-50 px-3 py-1.5 rounded-full bg-green-100 text-green-800 text-xs flex items-center gap-1.5">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-        </span>
-        Real-time sync active
-      </div>
-
-      {/* Toolbar */}
-      <div className="fixed bottom-6 left-6 z-40 flex flex-col gap-2">
+      {/* Toolbar - moved to left side, higher up to not overlap with anything */}
+      <div className="fixed bottom-6 left-6 z-40 flex flex-col gap-2 bg-white/90 p-2 rounded-lg shadow-lg">
         <Button
           variant="default"
           size="lg"
@@ -711,7 +702,7 @@ export default function App() {
         </div>
       </div>
 
-      <Legend />
+      <Legend components={data.components} />
 
       <DetailPanel
         node={selectedNode}

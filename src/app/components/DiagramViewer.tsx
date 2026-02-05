@@ -22,20 +22,11 @@ export function DiagramViewer({ isOpen, onClose }: DiagramViewerProps) {
           </Button>
         </div>
         <div className="flex-1 overflow-auto p-4">
-          <div className="flex items-center justify-center h-64 bg-gray-100 rounded-lg border-2 border-dashed border-gray-300">
-            <p className="text-gray-500 text-center">
-              Place your architecture diagram image in<br />
-              <code className="text-sm bg-gray-200 px-2 py-1 rounded mt-2 inline-block">public/diagram.png</code><br />
-              <span className="text-xs mt-2 block">Then update the img src below</span>
-            </p>
-          </div>
-          {/* Uncomment and update path when you have a diagram image:
           <img
             src="/diagram.png"
             alt="Architecture Diagram"
             className="w-full h-auto"
           />
-          */}
         </div>
         <div className="p-4 border-t bg-gray-50">
           <p className="text-xs text-gray-600">
