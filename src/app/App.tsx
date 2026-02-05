@@ -11,97 +11,50 @@ import { ArchitectureControls } from "./components/ArchitectureControls";
 import { Legend } from "./components/Legend";
 import { DiagramViewer } from "./components/DiagramViewer";
 import { Button } from "./components/ui/button";
-import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff } from "lucide-react";
+import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff, Users } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
 import { AddNodeDialog } from "./components/AddNodeDialog";
+import { createClient } from "@supabase/supabase-js";
+
+// ===========================================
+// SUPABASE CONFIGURATION (Real-time sync)
+// ===========================================
+const SUPABASE_URL = "https://ywnvnwsziqjhauyqgzjt.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3bnZud3N6aXFqaGF1eXFnemp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyNjUxODQsImV4cCI6MjA4NTg0MTE4NH0.VqANIUQSYsyAwTSZUIq7K_xFdd00iG0wiIT8U8bV_9o";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// ===========================================
 
 const STORAGE_KEY = "architecture-data";
 const CONNECTIONS_KEY = "architecture-connections";
 
-// ===========================================
-// CLOUD SYNC CONFIGURATION
-// ===========================================
-// To enable cloud sync for your team:
-// 1. Go to https://jsonbin.io and create a free account
-// 2. Create a new bin (paste any JSON like {})
-// 3. Copy your Bin ID and API Key
-// 4. Set these values below:
-const JSONBIN_BIN_ID = "69843022ae596e708f12947b";
-const JSONBIN_API_KEY = "$2a$10$FaQ.1qBBMhNc0RD/PPlNVeCtlFiztpq2pjOWCQlzG7SqvZz7s5rk6";
-
-const CLOUD_ENABLED = JSONBIN_BIN_ID && JSONBIN_API_KEY;
-// ===========================================
-
-interface CloudData {
-  data: ArchitectureData;
-  connections: Connection[];
-  lastModified: string;
-}
-
-// Fetch data from JSONBin
-async function fetchCloudData(): Promise<CloudData | null> {
-  if (!CLOUD_ENABLED) return null;
-  try {
-    const response = await fetch(
-      `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`,
-      {
-        headers: {
-          "X-Access-Key": JSONBIN_API_KEY,
-        },
-      }
-    );
-    if (response.ok) {
-      const result = await response.json();
-      return result.record;
-    }
-  } catch (e) {
-    console.error("Failed to fetch cloud data:", e);
-  }
-  return null;
-}
-
-// Save data to JSONBin
-async function saveCloudData(cloudData: CloudData): Promise<boolean> {
-  if (!CLOUD_ENABLED) return false;
-  try {
-    const response = await fetch(
-      `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Access-Key": JSONBIN_API_KEY,
-        },
-        body: JSON.stringify(cloudData),
-      }
-    );
-    return response.ok;
-  } catch (e) {
-    console.error("Failed to save cloud data:", e);
-    return false;
-  }
+interface Connection {
+  from: string;
+  to: string;
 }
 
 // Parse dates in loaded data
 function parseDates(data: ArchitectureData): ArchitectureData {
+  if (!data || !data.components) return initialArchitectureData;
   return {
     ...data,
     components: data.components.map((c) => ({
       ...c,
       lastUpdated: new Date(c.lastUpdated),
-      comments: c.comments.map((comment) => ({
+      comments: c.comments?.map((comment) => ({
         ...comment,
         timestamp: new Date(comment.timestamp),
-      })),
+      })) || [],
     })),
-    milestones: data.milestones.map((m) => ({
+    milestones: data.milestones?.map((m) => ({
       ...m,
       createdAt: new Date(m.createdAt),
-    })),
+    })) || [],
+    tags: data.tags || [],
   };
 }
 
-// Load data from localStorage or use initial data
+// Load data from localStorage as fallback
 function loadLocalData(): ArchitectureData {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -141,95 +94,149 @@ function loadLocalConnections(): Connection[] {
   ];
 }
 
-interface Connection {
-  from: string;
-  to: string;
-}
-
 export default function App() {
   const [data, setData] = useState<ArchitectureData>(loadLocalData);
-  const [selectedNodeId, setSelectedNodeId] = useState<
-    string | null
-  >(null);
-  const [showStatusOverlay, setShowStatusOverlay] =
-    useState(true);
-  const [activeFilterTags, setActiveFilterTags] = useState<
-    string[]
-  >([]);
-  const [activeMilestone, setActiveMilestone] = useState<
-    string | null
-  >(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [showStatusOverlay, setShowStatusOverlay] = useState(true);
+  const [activeFilterTags, setActiveFilterTags] = useState<string[]>([]);
+  const [activeMilestone, setActiveMilestone] = useState<string | null>(null);
   const [showDiagram, setShowDiagram] = useState(false);
   const [connections, setConnections] = useState<Connection[]>(loadLocalConnections);
   const [connectionMode, setConnectionMode] = useState(false);
-  const [connectionStart, setConnectionStart] = useState<
-    string | null
-  >(null);
-  const [draggedNode, setDraggedNode] = useState<string | null>(
-    null,
-  );
+  const [connectionStart, setConnectionStart] = useState<string | null>(null);
+  const [draggedNode, setDraggedNode] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [showAddArrow, setShowAddArrow] = useState(false);
   const [showAddNode, setShowAddNode] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "synced" | "offline" | "">("");
-  const [isLoading, setIsLoading] = useState(CLOUD_ENABLED);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "synced" | "offline" | "realtime" | "">("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [onlineUsers, setOnlineUsers] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitialLoad = useRef(true);
 
-  // Load from cloud on startup
+  // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
-    if (CLOUD_ENABLED) {
-      fetchCloudData().then((cloudData) => {
-        if (cloudData) {
-          setData(parseDates(cloudData.data));
-          setConnections(cloudData.connections);
+    // Fetch initial data
+    const fetchData = async () => {
+      try {
+        const { data: row, error } = await supabase
+          .from("architecture_data")
+          .select("*")
+          .eq("id", "main")
+          .single();
+
+        if (error) {
+          console.error("Supabase fetch error:", error);
+          setIsLoading(false);
+          return;
+        }
+
+        if (row && row.data && Object.keys(row.data).length > 0) {
+          setData(parseDates(row.data as ArchitectureData));
+          setConnections(row.connections as Connection[] || loadLocalConnections());
           setSaveStatus("synced");
+        } else {
+          // First time - save initial data to Supabase
+          await supabase
+            .from("architecture_data")
+            .upsert({
+              id: "main",
+              data: initialArchitectureData,
+              connections: loadLocalConnections(),
+              updated_at: new Date().toISOString(),
+            });
+        }
+      } catch (e) {
+        console.error("Failed to fetch from Supabase:", e);
+      }
+      setIsLoading(false);
+      isInitialLoad.current = false;
+    };
+
+    fetchData();
+
+    // Subscribe to real-time changes
+    const channel = supabase
+      .channel("architecture_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "architecture_data",
+          filter: "id=eq.main",
+        },
+        (payload) => {
+          console.log("Real-time update received:", payload);
+          const newData = payload.new as { data: ArchitectureData; connections: Connection[] };
+          if (newData.data) {
+            setData(parseDates(newData.data));
+          }
+          if (newData.connections) {
+            setConnections(newData.connections);
+          }
+          setSaveStatus("realtime");
           setTimeout(() => setSaveStatus(""), 2000);
         }
-        setIsLoading(false);
+      )
+      .subscribe((status) => {
+        console.log("Realtime subscription status:", status);
       });
-    }
+
+    // Cleanup
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  // Auto-save to localStorage and cloud when data changes
+  // Auto-save to Supabase when data changes (debounced)
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || isInitialLoad.current) return;
+
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
 
     setSaveStatus("saving");
-    const timeout = setTimeout(async () => {
-      // Always save to localStorage
+
+    // Debounce saves to avoid too many requests
+    saveTimeoutRef.current = setTimeout(async () => {
+      // Save to localStorage as backup
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
 
-      // Save to cloud if enabled
-      if (CLOUD_ENABLED) {
-        const success = await saveCloudData({
-          data,
-          connections,
-          lastModified: new Date().toISOString(),
-        });
-        setSaveStatus(success ? "synced" : "offline");
-      } else {
-        setSaveStatus("saved");
+      // Save to Supabase
+      try {
+        const { error } = await supabase
+          .from("architecture_data")
+          .upsert({
+            id: "main",
+            data: data,
+            connections: connections,
+            updated_at: new Date().toISOString(),
+          });
+
+        if (error) {
+          console.error("Supabase save error:", error);
+          setSaveStatus("offline");
+        } else {
+          setSaveStatus("synced");
+        }
+      } catch (e) {
+        console.error("Failed to save to Supabase:", e);
+        setSaveStatus("offline");
       }
       setTimeout(() => setSaveStatus(""), 2000);
-    }, 500);
-    return () => clearTimeout(timeout);
-  }, [data, connections, isLoading]);
+    }, 800);
 
-  // Refresh from cloud (manual sync)
-  const handleRefresh = async () => {
-    if (!CLOUD_ENABLED) return;
-    setSaveStatus("saving");
-    const cloudData = await fetchCloudData();
-    if (cloudData) {
-      setData(parseDates(cloudData.data));
-      setConnections(cloudData.connections);
-      setSaveStatus("synced");
-    } else {
-      setSaveStatus("offline");
-    }
-    setTimeout(() => setSaveStatus(""), 2000);
-  };
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [data, connections, isLoading]);
 
   // Export data as JSON file
   const handleExport = () => {
@@ -259,22 +266,7 @@ export default function App() {
       try {
         const imported = JSON.parse(event.target?.result as string);
         if (imported.data && imported.connections) {
-          // Convert date strings back to Date objects
-          imported.data.components = imported.data.components.map(
-            (c: ComponentNode) => ({
-              ...c,
-              lastUpdated: new Date(c.lastUpdated),
-              comments: c.comments.map((comment: any) => ({
-                ...comment,
-                timestamp: new Date(comment.timestamp),
-              })),
-            })
-          );
-          imported.data.milestones = imported.data.milestones.map((m: any) => ({
-            ...m,
-            createdAt: new Date(m.createdAt),
-          }));
-          setData(imported.data);
+          setData(parseDates(imported.data));
           setConnections(imported.connections);
           alert("Data imported successfully!");
         } else {
@@ -297,49 +289,36 @@ export default function App() {
   };
 
   const selectedNode =
-    data.components.find((c) => c.id === selectedNodeId) ||
-    null;
+    data.components.find((c) => c.id === selectedNodeId) || null;
 
   const filteredComponents = useMemo(() => {
     let components = data.components;
 
     if (activeMilestone) {
-      const milestone = data.milestones.find(
-        (m) => m.id === activeMilestone,
-      );
+      const milestone = data.milestones.find((m) => m.id === activeMilestone);
       if (milestone) {
         components = components.filter((comp) =>
-          comp.tags.some((tag) =>
-            milestone.filterTags.includes(tag),
-          ),
+          comp.tags.some((tag) => milestone.filterTags.includes(tag))
         );
       }
     }
 
     if (activeFilterTags.length > 0) {
       components = components.filter((comp) =>
-        activeFilterTags.some((tag) => comp.tags.includes(tag)),
+        activeFilterTags.some((tag) => comp.tags.includes(tag))
       );
     }
 
     return components;
-  }, [
-    data.components,
-    activeFilterTags,
-    activeMilestone,
-    data.milestones,
-  ]);
+  }, [data.components, activeFilterTags, activeMilestone, data.milestones]);
 
-  const handleUpdateNode = (
-    nodeId: string,
-    updates: Partial<ComponentNode>,
-  ) => {
+  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>) => {
     setData((prev) => ({
       ...prev,
       components: prev.components.map((comp) =>
         comp.id === nodeId
           ? { ...comp, ...updates, lastUpdated: new Date() }
-          : comp,
+          : comp
       ),
     }));
   };
@@ -347,14 +326,12 @@ export default function App() {
   const handleDeleteNode = (nodeId: string) => {
     if (
       window.confirm(
-        "Are you sure you want to delete this node? This action cannot be undone.",
+        "Are you sure you want to delete this node? This action cannot be undone."
       )
     ) {
       setData((prev) => ({
         ...prev,
-        components: prev.components.filter(
-          (comp) => comp.id !== nodeId,
-        ),
+        components: prev.components.filter((comp) => comp.id !== nodeId),
       }));
       setSelectedNodeId(null);
     }
@@ -374,9 +351,7 @@ export default function App() {
 
   const handleToggleFilterTag = (tagId: string) => {
     setActiveFilterTags((prev) =>
-      prev.includes(tagId)
-        ? prev.filter((t) => t !== tagId)
-        : [...prev, tagId],
+      prev.includes(tagId) ? prev.filter((t) => t !== tagId) : [...prev, tagId]
     );
   };
 
@@ -384,9 +359,7 @@ export default function App() {
     setActiveFilterTags([]);
   };
 
-  const handleSelectMilestone = (
-    milestoneId: string | null,
-  ) => {
+  const handleSelectMilestone = (milestoneId: string | null) => {
     setActiveMilestone(milestoneId);
     setActiveFilterTags([]);
   };
@@ -398,22 +371,14 @@ export default function App() {
 
   const handleEndConnection = (nodeId: string) => {
     if (connectionStart && connectionStart !== nodeId) {
-      setConnections((prev) => [
-        ...prev,
-        { from: connectionStart, to: nodeId },
-      ]);
+      setConnections((prev) => [...prev, { from: connectionStart, to: nodeId }]);
     }
     setConnectionMode(false);
     setConnectionStart(null);
   };
 
-  const handleDragStart = (
-    nodeId: string,
-    e: React.MouseEvent,
-  ) => {
-    const node = filteredComponents.find(
-      (c) => c.id === nodeId,
-    );
+  const handleDragStart = (nodeId: string, e: React.MouseEvent) => {
+    const node = filteredComponents.find((c) => c.id === nodeId);
     if (node) {
       setDraggedNode(nodeId);
       setDragOffset({
@@ -436,7 +401,7 @@ export default function App() {
                   y: e.clientY - dragOffset.y,
                 },
               }
-            : comp,
+            : comp
         ),
       }));
     }
@@ -454,9 +419,7 @@ export default function App() {
     >
       <ArchitectureControls
         showStatusOverlay={showStatusOverlay}
-        onToggleStatusOverlay={() =>
-          setShowStatusOverlay(!showStatusOverlay)
-        }
+        onToggleStatusOverlay={() => setShowStatusOverlay(!showStatusOverlay)}
         allTags={data.tags}
         activeFilterTags={activeFilterTags}
         onToggleFilterTag={handleToggleFilterTag}
@@ -471,8 +434,8 @@ export default function App() {
       {connectionMode && (
         <div className="fixed top-[80px] left-1/2 transform -translate-x-1/2 z-50 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg">
           <p className="text-sm">
-            Connection mode active. Click on a target node to
-            connect, or press ESC to cancel.
+            Connection mode active. Click on a target node to connect, or press
+            ESC to cancel.
           </p>
         </div>
       )}
@@ -489,28 +452,40 @@ export default function App() {
 
       {/* Save Status */}
       {saveStatus && (
-        <div className={`fixed top-[80px] right-6 z-50 px-4 py-2 rounded-lg shadow text-sm flex items-center gap-2 ${
-          saveStatus === "synced" ? "bg-blue-100 text-blue-800" :
-          saveStatus === "offline" ? "bg-yellow-100 text-yellow-800" :
-          "bg-green-100 text-green-800"
-        }`}>
-          {saveStatus === "saving" && <RefreshCw className="h-4 w-4 animate-spin" />}
-          {saveStatus === "synced" && <Cloud className="h-4 w-4" />}
+        <div
+          className={`fixed top-[80px] right-6 z-50 px-4 py-2 rounded-lg shadow text-sm flex items-center gap-2 ${
+            saveStatus === "synced" || saveStatus === "realtime"
+              ? "bg-green-100 text-green-800"
+              : saveStatus === "offline"
+              ? "bg-yellow-100 text-yellow-800"
+              : "bg-blue-100 text-blue-800"
+          }`}
+        >
+          {saveStatus === "saving" && (
+            <RefreshCw className="h-4 w-4 animate-spin" />
+          )}
+          {(saveStatus === "synced" || saveStatus === "realtime") && (
+            <Cloud className="h-4 w-4" />
+          )}
           {saveStatus === "offline" && <CloudOff className="h-4 w-4" />}
-          {saveStatus === "saved" && "✓"}
-          {saveStatus === "saving" ? "Saving..." :
-           saveStatus === "synced" ? "Synced to cloud" :
-           saveStatus === "offline" ? "Saved locally (cloud offline)" :
-           "Saved"}
+          {saveStatus === "saving"
+            ? "Syncing..."
+            : saveStatus === "synced"
+            ? "Synced ✓"
+            : saveStatus === "realtime"
+            ? "Updated from team!"
+            : "Saved locally"}
         </div>
       )}
 
-      {/* Cloud Status Banner */}
-      {!CLOUD_ENABLED && (
-        <div className="fixed top-[80px] left-1/2 transform -translate-x-1/2 z-40 bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-2 rounded-lg shadow text-xs max-w-md text-center">
-          Local mode - Set up JSONBin in App.tsx to enable team sync
-        </div>
-      )}
+      {/* Real-time indicator */}
+      <div className="fixed top-[80px] left-6 z-50 px-3 py-1.5 rounded-full bg-green-100 text-green-800 text-xs flex items-center gap-1.5">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+        </span>
+        Real-time sync active
+      </div>
 
       {/* Toolbar */}
       <div className="fixed bottom-6 left-6 z-40 flex flex-col gap-2">
@@ -533,9 +508,7 @@ export default function App() {
           className="shadow-lg"
         >
           <Link className="h-5 w-5 mr-2" />
-          {connectionMode
-            ? "Cancel Connection"
-            : "Connect Nodes"}
+          {connectionMode ? "Cancel Connection" : "Connect Nodes"}
         </Button>
         <Button
           variant="outline"
@@ -557,18 +530,6 @@ export default function App() {
           accept=".json"
           className="hidden"
         />
-        {CLOUD_ENABLED && (
-          <Button
-            variant="outline"
-            size="lg"
-            onClick={handleRefresh}
-            className="shadow-lg"
-            title="Refresh from cloud"
-          >
-            <RefreshCw className="h-5 w-5 mr-2" />
-            Sync
-          </Button>
-        )}
         <Button
           variant="outline"
           size="lg"
@@ -618,16 +579,11 @@ export default function App() {
             </marker>
           </defs>
           {connections.map((conn, idx) => {
-            const fromNode = filteredComponents.find(
-              (c) => c.id === conn.from,
-            );
-            const toNode = filteredComponents.find(
-              (c) => c.id === conn.to,
-            );
+            const fromNode = filteredComponents.find((c) => c.id === conn.from);
+            const toNode = filteredComponents.find((c) => c.id === conn.to);
 
             if (!fromNode || !toNode) return null;
 
-            // Determine node widths
             const isFromAgentNode = [
               "finance-agent",
               "legal-agent",
@@ -643,11 +599,10 @@ export default function App() {
             const fromWidth = isFromAgentNode ? 80 : 110;
             const toWidth = isToAgentNode ? 80 : 110;
 
-            // Calculate connection points
-            const x1 = fromNode.position.x + fromWidth; // center of from node
-            const y1 = fromNode.position.y + 70; // bottom of from node
-            const x2 = toNode.position.x + toWidth; // center of to node
-            const y2 = toNode.position.y; // top of to node
+            const x1 = fromNode.position.x + fromWidth;
+            const y1 = fromNode.position.y + 70;
+            const x2 = toNode.position.x + toWidth;
+            const y2 = toNode.position.y;
 
             return (
               <g key={idx}>
@@ -661,12 +616,8 @@ export default function App() {
                   markerEnd="url(#arrowhead)"
                   className="pointer-events-auto cursor-pointer hover:stroke-red-500"
                   onClick={() => {
-                    if (
-                      window.confirm("Delete this connection?")
-                    ) {
-                      setConnections((prev) =>
-                        prev.filter((_, i) => i !== idx),
-                      );
+                    if (window.confirm("Delete this connection?")) {
+                      setConnections((prev) => prev.filter((_, i) => i !== idx));
                     }
                   }}
                 />
@@ -680,10 +631,7 @@ export default function App() {
           className="relative"
           style={{ zIndex: 10, minHeight: "1200px" }}
           onClick={(e) => {
-            if (
-              connectionMode &&
-              e.target === e.currentTarget
-            ) {
+            if (connectionMode && e.target === e.currentTarget) {
               setConnectionMode(false);
               setConnectionStart(null);
             }
