@@ -1,5 +1,5 @@
 import { ComponentNode, Tag, Comment } from '../types/architecture';
-import { X, Plus, Send, Edit2, Check, Presentation, Trash2 } from 'lucide-react';
+import { X, Plus, Send, Edit2, Check, Presentation, Trash2, RefreshCw } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -33,6 +33,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   // Edit states
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   // Signal edit end when panel closes or node changes
   useEffect(() => {
@@ -128,23 +129,63 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
     setEditValue(Array.isArray(currentValue) ? currentValue.join('\n') : currentValue);
   };
 
-  const saveEdit = (field: string) => {
+  const saveEdit = async (field: string) => {
+    setSaveState('saving');
+
     if (field === 'inputs' || field === 'outputs') {
       const arrayValue = editValue.split('\n').filter((line) => line.trim());
       onUpdateNode(node.id, { [field]: arrayValue });
     } else {
       onUpdateNode(node.id, { [field]: editValue });
     }
-    setEditingField(null);
-    setEditValue('');
-    onEditEnd?.();
+
+    // Brief delay to show saving state
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    setSaveState('saved');
+
+    // Show success for 1 second, then close edit mode
+    setTimeout(() => {
+      setSaveState('idle');
+      setEditingField(null);
+      setEditValue('');
+      onEditEnd?.();
+    }, 1000);
   };
 
   const cancelEdit = () => {
     setEditingField(null);
     setEditValue('');
+    setSaveState('idle');
     onEditEnd?.();
   };
+
+  // Reusable Save button with loading/success states
+  const SaveButton = ({ onClick }: { onClick: () => void }) => (
+    <Button
+      size="sm"
+      onClick={onClick}
+      disabled={saveState === 'saving'}
+      className="transform transition-all duration-150 hover:scale-[1.03] hover:shadow-md active:scale-[0.98]"
+    >
+      {saveState === 'saving' ? (
+        <>
+          <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+          Saving…
+        </>
+      ) : saveState === 'saved' ? (
+        <>
+          <Check className="h-3 w-3 mr-1 text-green-500" />
+          Saved ✓
+        </>
+      ) : (
+        <>
+          <Check className="h-3 w-3 mr-1" />
+          Save
+        </>
+      )}
+    </Button>
+  );
 
   return (
     <div className="fixed right-0 top-0 h-full w-[500px] border-l bg-white shadow-2xl overflow-y-auto z-50">
@@ -160,9 +201,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   className="text-xl font-semibold"
                 />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => saveEdit('name')}>
-                    <Check className="h-3 w-3 mr-1" /> Save
-                  </Button>
+                  <SaveButton onClick={() => saveEdit('name')} />
                   <Button size="sm" variant="outline" onClick={cancelEdit}>
                     Cancel
                   </Button>
@@ -213,9 +252,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   </SelectContent>
                 </Select>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => saveEdit('status')}>
-                    <Check className="h-3 w-3 mr-1" /> Save
-                  </Button>
+                  <SaveButton onClick={() => saveEdit('status')} />
                   <Button size="sm" variant="outline" onClick={cancelEdit}>
                     Cancel
                   </Button>
@@ -273,9 +310,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 className="text-sm min-h-[100px]"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => saveEdit('description')}>
-                  <Check className="h-3 w-3 mr-1" /> Save
-                </Button>
+                <SaveButton onClick={() => saveEdit('description')} />
                 <Button size="sm" variant="outline" onClick={cancelEdit}>
                   Cancel
                 </Button>
@@ -311,9 +346,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   className="text-sm min-h-[80px]"
                 />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => saveEdit('inputs')}>
-                    <Check className="h-3 w-3 mr-1" /> Save
-                  </Button>
+                  <SaveButton onClick={() => saveEdit('inputs')} />
                   <Button size="sm" variant="outline" onClick={cancelEdit}>
                     Cancel
                   </Button>
@@ -350,9 +383,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   className="text-sm min-h-[80px]"
                 />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => saveEdit('outputs')}>
-                    <Check className="h-3 w-3 mr-1" /> Save
-                  </Button>
+                  <SaveButton onClick={() => saveEdit('outputs')} />
                   <Button size="sm" variant="outline" onClick={cancelEdit}>
                     Cancel
                   </Button>
@@ -392,9 +423,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 className="text-sm"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => saveEdit('owner')}>
-                  <Check className="h-3 w-3 mr-1" /> Save
-                </Button>
+                <SaveButton onClick={() => saveEdit('owner')} />
                 <Button size="sm" variant="outline" onClick={cancelEdit}>
                   Cancel
                 </Button>
@@ -433,9 +462,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 className="text-sm min-h-[100px]"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => saveEdit('workDone')}>
-                  <Check className="h-3 w-3 mr-1" /> Save
-                </Button>
+                <SaveButton onClick={() => saveEdit('workDone')} />
                 <Button size="sm" variant="outline" onClick={cancelEdit}>
                   Cancel
                 </Button>
@@ -472,9 +499,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 className="text-sm min-h-[100px]"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => saveEdit('inDevelopment')}>
-                  <Check className="h-3 w-3 mr-1" /> Save
-                </Button>
+                <SaveButton onClick={() => saveEdit('inDevelopment')} />
                 <Button size="sm" variant="outline" onClick={cancelEdit}>
                   Cancel
                 </Button>
@@ -511,9 +536,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 className="text-sm min-h-[100px]"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => saveEdit('blocker')}>
-                  <Check className="h-3 w-3 mr-1" /> Save
-                </Button>
+                <SaveButton onClick={() => saveEdit('blocker')} />
                 <Button size="sm" variant="outline" onClick={cancelEdit}>
                   Cancel
                 </Button>
