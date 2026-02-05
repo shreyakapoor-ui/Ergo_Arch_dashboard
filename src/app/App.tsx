@@ -120,6 +120,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
+  const isSavingRef = useRef(false); // Track when save is in progress to prevent polling overwrite
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
@@ -144,6 +145,11 @@ export default function App() {
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
+          // Skip polling updates while we're saving to avoid overwriting local changes
+          if (isPolling && isSavingRef.current) {
+            return; // Don't overwrite local changes while saving
+          }
+
           // Only update if data has changed (for polling)
           if (isPolling && row.updated_at === lastUpdatedAt) {
             return; // No changes
@@ -236,6 +242,7 @@ export default function App() {
     }
 
     setSaveStatus("saving");
+    isSavingRef.current = true; // Mark that we're saving - don't let polling overwrite
 
     // Debounce saves to avoid too many requests
     saveTimeoutRef.current = setTimeout(async () => {
@@ -264,6 +271,7 @@ export default function App() {
         console.error("Failed to save to Supabase:", e);
         setSaveStatus("offline");
       }
+      isSavingRef.current = false; // Done saving - polling can resume
       setTimeout(() => setSaveStatus(""), 2000);
     }, 800);
 
