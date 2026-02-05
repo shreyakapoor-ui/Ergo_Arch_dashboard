@@ -125,8 +125,11 @@ export default function App() {
   useEffect(() => {
     // Skip if not authenticated
     if (!isAuthenticated) return;
+
+    let lastUpdatedAt: string | null = null;
+
     // Fetch initial data
-    const fetchData = async () => {
+    const fetchData = async (isPolling = false) => {
       try {
         const { data: row, error } = await supabase
           .from("architecture_data")
@@ -136,14 +139,26 @@ export default function App() {
 
         if (error) {
           console.error("Supabase fetch error:", error);
-          setIsLoading(false);
+          if (!isPolling) setIsLoading(false);
           return;
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
+          // Only update if data has changed (for polling)
+          if (isPolling && row.updated_at === lastUpdatedAt) {
+            return; // No changes
+          }
+
+          lastUpdatedAt = row.updated_at;
           setData(parseDates(row.data as ArchitectureData));
           setConnections(row.connections as Connection[] || loadLocalConnections());
-          setSaveStatus("synced");
+
+          if (isPolling) {
+            setSaveStatus("realtime");
+            setTimeout(() => setSaveStatus(""), 2000);
+          } else {
+            setSaveStatus("synced");
+          }
         } else {
           // First time - save initial data to Supabase
           await supabase
@@ -158,8 +173,10 @@ export default function App() {
       } catch (e) {
         console.error("Failed to fetch from Supabase:", e);
       }
-      setIsLoading(false);
-      isInitialLoad.current = false;
+      if (!isPolling) {
+        setIsLoading(false);
+        isInitialLoad.current = false;
+      }
     };
 
     fetchData();
@@ -196,9 +213,16 @@ export default function App() {
         }
       });
 
+    // Polling fallback - check for updates every 3 seconds
+    // This ensures sync even if realtime websocket has issues
+    const pollInterval = setInterval(() => {
+      fetchData(true);
+    }, 3000);
+
     // Cleanup
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(pollInterval);
     };
   }, [isAuthenticated]);
 
