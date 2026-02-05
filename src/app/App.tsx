@@ -120,6 +120,7 @@ export default function App() {
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
   const isSavingRef = useRef(false); // Track when save is in progress to prevent polling overwrite
+  const isEditingRef = useRef(false); // Track when user is editing in DetailPanel
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
@@ -144,9 +145,9 @@ export default function App() {
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
-          // Skip polling updates while we're saving to avoid overwriting local changes
-          if (isPolling && isSavingRef.current) {
-            return; // Don't overwrite local changes while saving
+          // Skip polling updates while we're saving OR editing to avoid overwriting local changes
+          if (isPolling && (isSavingRef.current || isEditingRef.current)) {
+            return; // Don't overwrite local changes while saving or editing
           }
 
           // Only update if data has changed (for polling)
@@ -198,6 +199,11 @@ export default function App() {
         },
         (payload) => {
           console.log("Real-time update received:", payload);
+          // Skip updates while saving or editing to protect local state
+          if (isSavingRef.current || isEditingRef.current) {
+            console.log("Skipping realtime update - saving or editing in progress");
+            return;
+          }
           if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
             const newData = payload.new as { data: ArchitectureData; connections: Connection[] };
             if (newData.data) {
@@ -683,6 +689,8 @@ export default function App() {
         onUpdateNode={handleUpdateNode}
         onDeleteNode={handleDeleteNode}
         onCreateTag={handleCreateTag}
+        onEditStart={() => { isEditingRef.current = true; }}
+        onEditEnd={() => { isEditingRef.current = false; }}
       />
 
       <DiagramViewer

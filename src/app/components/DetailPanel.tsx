@@ -7,7 +7,7 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import { Label } from './ui/label';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 
 interface DetailPanelProps {
@@ -18,9 +18,11 @@ interface DetailPanelProps {
   onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => void;
   onDeleteNode: (nodeId: string) => void;
   onCreateTag: (label: string, color: string) => void;
+  onEditStart?: () => void;
+  onEditEnd?: () => void;
 }
 
-export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag }: DetailPanelProps) {
+export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd }: DetailPanelProps) {
   const [newTagLabel, setNewTagLabel] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
   const [newComment, setNewComment] = useState('');
@@ -31,6 +33,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   // Edit states
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+
+  // Signal edit end when panel closes or node changes
+  useEffect(() => {
+    return () => {
+      onEditEnd?.();
+    };
+  }, [node?.id, onEditEnd]);
 
   if (!node) return null;
 
@@ -114,6 +123,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   };
 
   const startEdit = (field: string, currentValue: string | string[]) => {
+    onEditStart?.();
     setEditingField(field);
     setEditValue(Array.isArray(currentValue) ? currentValue.join('\n') : currentValue);
   };
@@ -127,11 +137,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
     }
     setEditingField(null);
     setEditValue('');
+    onEditEnd?.();
   };
 
   const cancelEdit = () => {
     setEditingField(null);
     setEditValue('');
+    onEditEnd?.();
   };
 
   return (
