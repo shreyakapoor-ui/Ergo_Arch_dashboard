@@ -123,6 +123,7 @@ export default function App() {
   const isInitialLoad = useRef(true);
   const isSavingRef = useRef(false); // Track when save is in progress to prevent polling overwrite
   const isEditingRef = useRef(false); // Track when user is editing in DetailPanel
+  const lastSaveTimeRef = useRef(0); // Track when last save completed to prevent immediate overwrites
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
@@ -148,7 +149,14 @@ export default function App() {
 
         if (row && row.data && Object.keys(row.data).length > 0) {
           // Skip polling updates while we're saving OR editing to avoid overwriting local changes
-          if (isPolling && (isSavingRef.current || isEditingRef.current)) {
+          // Also skip for 2 seconds after a save completes (to handle race conditions)
+          const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
+          if (isPolling && (isSavingRef.current || isEditingRef.current || timeSinceLastSave < 2000)) {
+            console.log("Skipping poll - save in progress or recently completed", {
+              saving: isSavingRef.current,
+              editing: isEditingRef.current,
+              timeSinceLastSave
+            });
             return; // Don't overwrite local changes while saving or editing
           }
 
@@ -202,8 +210,14 @@ export default function App() {
         (payload) => {
           console.log("Real-time update received:", payload);
           // Skip updates while saving or editing to protect local state
-          if (isSavingRef.current || isEditingRef.current) {
-            console.log("Skipping realtime update - saving or editing in progress");
+          // Also skip for 2 seconds after a save completes (to handle race conditions)
+          const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
+          if (isSavingRef.current || isEditingRef.current || timeSinceLastSave < 2000) {
+            console.log("Skipping realtime update - save in progress or recently completed", {
+              saving: isSavingRef.current,
+              editing: isEditingRef.current,
+              timeSinceLastSave
+            });
             return;
           }
           if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
@@ -273,6 +287,7 @@ export default function App() {
           setSaveStatus("offline");
         } else {
           setSaveStatus("synced");
+          lastSaveTimeRef.current = Date.now(); // Track when save completed for race condition protection
         }
       } catch (e) {
         console.error("Failed to save to Supabase:", e);
