@@ -8,7 +8,7 @@ interface PasswordGateProps {
 }
 
 // Simple password - change this to whatever you want
-const ADMIN_PASSWORD = "ergo2024";
+const ADMIN_PASSWORD = "ergo2026!Arch#Secure";
 
 export function PasswordGate({ onSuccess }: PasswordGateProps) {
   const [password, setPassword] = useState('');
