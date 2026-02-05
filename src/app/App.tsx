@@ -121,13 +121,10 @@ export default function App() {
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
 
-  // Show password gate if not authenticated
-  if (!isAuthenticated) {
-    return <PasswordGate onSuccess={() => setIsAuthenticated(true)} />;
-  }
-
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
+    // Skip if not authenticated
+    if (!isAuthenticated) return;
     // Fetch initial data
     const fetchData = async () => {
       try {
@@ -203,11 +200,11 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [isAuthenticated]);
 
   // Auto-save to Supabase when data changes (debounced)
   useEffect(() => {
-    if (isLoading || isInitialLoad.current) return;
+    if (!isAuthenticated || isLoading || isInitialLoad.current) return;
 
     // Clear existing timeout
     if (saveTimeoutRef.current) {
@@ -425,6 +422,11 @@ export default function App() {
   const handleDragEnd = () => {
     setDraggedNode(null);
   };
+
+  // Show password gate if not authenticated
+  if (!isAuthenticated) {
+    return <PasswordGate onSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div
