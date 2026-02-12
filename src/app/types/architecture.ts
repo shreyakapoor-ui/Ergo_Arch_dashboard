@@ -15,6 +15,12 @@ export interface Comment {
   status: 'open' | 'answered' | 'parked';
 }
 
+export interface WeeklyUpdate {
+  id: string;
+  date: string; // ISO date string e.g. "2026-02-12"
+  text: string;
+}
+
 export interface ComponentNode {
   id: string;
   name: string;
@@ -32,6 +38,9 @@ export interface ComponentNode {
   inDevelopment?: string;
   blocker?: string;
   futureScope?: string;
+  weeklyUpdates?: WeeklyUpdate[];
+  remainingMvpScope?: string;
+  blockers?: string;
 }
 
 export interface MilestoneView {
