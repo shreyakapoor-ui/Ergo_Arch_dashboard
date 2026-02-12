@@ -31,6 +31,7 @@ export interface ComponentNode {
   workDone?: string;
   inDevelopment?: string;
   blocker?: string;
+  futureScope?: string;
 }
 
 export interface MilestoneView {
