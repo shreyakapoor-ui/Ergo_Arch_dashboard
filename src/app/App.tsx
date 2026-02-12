@@ -103,7 +103,6 @@ export default function App() {
 
   const [data, setData] = useState<ArchitectureData>(loadLocalData);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [showStatusOverlay, setShowStatusOverlay] = useState(true);
   const [activeFilterTags, setActiveFilterTags] = useState<string[]>([]);
   const [activeMilestone, setActiveMilestone] = useState<string | null>(null);
   const [showDiagram, setShowDiagram] = useState(false);
@@ -507,16 +506,6 @@ export default function App() {
     }));
   };
 
-  const handleToggleFilterTag = (tagId: string) => {
-    setActiveFilterTags((prev) =>
-      prev.includes(tagId) ? prev.filter((t) => t !== tagId) : [...prev, tagId]
-    );
-  };
-
-  const handleClearFilters = () => {
-    setActiveFilterTags([]);
-  };
-
   const handleSelectMilestone = (milestoneId: string | null) => {
     setActiveMilestone(milestoneId);
     setActiveFilterTags([]);
@@ -582,12 +571,7 @@ export default function App() {
       onMouseUp={handleDragEnd}
     >
       <ArchitectureControls
-        showStatusOverlay={showStatusOverlay}
-        onToggleStatusOverlay={() => setShowStatusOverlay(!showStatusOverlay)}
         allTags={data.tags}
-        activeFilterTags={activeFilterTags}
-        onToggleFilterTag={handleToggleFilterTag}
-        onClearFilters={handleClearFilters}
         milestones={data.milestones}
         onSelectMilestone={handleSelectMilestone}
         activeMilestone={activeMilestone}
@@ -787,7 +771,7 @@ export default function App() {
                   setSelectedNodeId(node.id);
                 }
               }}
-              showStatusOverlay={showStatusOverlay}
+              showStatusOverlay={true}
               onDragStart={(e) => handleDragStart(node.id, e)}
               connectionMode={connectionMode}
               isConnectionStart={connectionStart === node.id}
