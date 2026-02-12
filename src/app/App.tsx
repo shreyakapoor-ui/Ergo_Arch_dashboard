@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import type {
   ArchitectureData,
   ComponentNode,
@@ -121,9 +121,54 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
-  const isSavingRef = useRef(false); // Track when save is in progress to prevent polling overwrite
-  const isEditingRef = useRef(false); // Track when user is editing in DetailPanel
-  const lastSaveTimeRef = useRef(0); // Track when last save completed to prevent immediate overwrites
+  const editingNodeIdRef = useRef<string | null>(null); // Track which node is being edited (for selective merge)
+  const lastSaveTimestampRef = useRef<string | null>(null); // Track our last save to dedupe echoes
+  const pendingSaveResolvers = useRef<Array<{ resolve: () => void; reject: (e: Error) => void }>>([]); // Track pending save promises
+
+  // ===== Resizable Detail Panel state =====
+  const PANEL_MIN_WIDTH = 320;
+  const PANEL_MAX_WIDTH_PERCENT = 0.8;
+  const [panelWidth, setPanelWidth] = useState(500);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(500);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = panelWidth;
+  }, [panelWidth]);
+
+  // Global mousemove/mouseup for resize (attached to window so drag works outside component)
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleResizeMove = (e: MouseEvent) => {
+      const maxWidth = window.innerWidth * PANEL_MAX_WIDTH_PERCENT;
+      const delta = resizeStartX.current - e.clientX; // dragging left = wider panel
+      const newWidth = Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, resizeStartWidth.current + delta));
+      setPanelWidth(newWidth);
+    };
+
+    const handleResizeEnd = () => {
+      setIsResizing(false);
+    };
+
+    // Set global cursor style so it stays col-resize even when mouse leaves the handle
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    window.addEventListener("mousemove", handleResizeMove);
+    window.addEventListener("mouseup", handleResizeEnd);
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleResizeMove);
+      window.removeEventListener("mouseup", handleResizeEnd);
+    };
+  }, [isResizing]);
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
@@ -148,16 +193,10 @@ export default function App() {
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
-          // Skip polling updates while we're saving OR editing to avoid overwriting local changes
-          // Also skip for 2 seconds after a save completes (to handle race conditions)
-          const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
-          if (isPolling && (isSavingRef.current || isEditingRef.current || timeSinceLastSave < 2000)) {
-            console.log("Skipping poll - save in progress or recently completed", {
-              saving: isSavingRef.current,
-              editing: isEditingRef.current,
-              timeSinceLastSave
-            });
-            return; // Don't overwrite local changes while saving or editing
+          // Dedupe: skip if this is our own echo (we just saved this)
+          if (row.updated_at === lastSaveTimestampRef.current) {
+            console.log("Skipping poll - this is our own echo");
+            return;
           }
 
           // Only update if data has changed (for polling)
@@ -166,7 +205,29 @@ export default function App() {
           }
 
           lastUpdatedAt = row.updated_at;
-          setData(parseDates(row.data as ArchitectureData));
+
+          // Row-level merge: preserve the node being edited locally
+          const incomingData = parseDates(row.data as ArchitectureData);
+          const editingId = editingNodeIdRef.current;
+
+          if (editingId) {
+            // Merge: keep our local version of the editing node, take remote for everything else
+            setData(prev => ({
+              ...incomingData,
+              components: incomingData.components.map(incoming => {
+                if (incoming.id === editingId) {
+                  // Keep our local version of this node
+                  const local = prev.components.find(c => c.id === editingId);
+                  return local || incoming;
+                }
+                return incoming;
+              }),
+            }));
+          } else {
+            // No active edit - safe to replace everything
+            setData(incomingData);
+          }
+
           setConnections(row.connections as Connection[] || loadLocalConnections());
 
           if (isPolling) {
@@ -209,24 +270,38 @@ export default function App() {
         },
         (payload) => {
           console.log("Real-time update received:", payload);
-          // Skip updates while saving or editing to protect local state
-          // Also skip for 2 seconds after a save completes (to handle race conditions)
-          const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
-          if (isSavingRef.current || isEditingRef.current || timeSinceLastSave < 2000) {
-            console.log("Skipping realtime update - save in progress or recently completed", {
-              saving: isSavingRef.current,
-              editing: isEditingRef.current,
-              timeSinceLastSave
-            });
-            return;
-          }
+
           if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
-            const newData = payload.new as { data: ArchitectureData; connections: Connection[] };
-            if (newData.data) {
-              setData(parseDates(newData.data));
+            const newRow = payload.new as { data: ArchitectureData; connections: Connection[]; updated_at: string };
+
+            // Dedupe: skip if this is our own echo
+            if (newRow.updated_at === lastSaveTimestampRef.current) {
+              console.log("Skipping realtime - this is our own echo");
+              return;
             }
-            if (newData.connections) {
-              setConnections(newData.connections);
+
+            const incomingData = parseDates(newRow.data);
+            const editingId = editingNodeIdRef.current;
+
+            if (editingId) {
+              // Row-level merge: keep our local version of the editing node
+              setData(prev => ({
+                ...incomingData,
+                components: incomingData.components.map(incoming => {
+                  if (incoming.id === editingId) {
+                    const local = prev.components.find(c => c.id === editingId);
+                    return local || incoming;
+                  }
+                  return incoming;
+                }),
+              }));
+            } else {
+              // No active edit - safe to replace everything
+              setData(incomingData);
+            }
+
+            if (newRow.connections) {
+              setConnections(newRow.connections);
             }
             setSaveStatus("realtime");
             setTimeout(() => setSaveStatus(""), 2000);
@@ -263,13 +338,16 @@ export default function App() {
     }
 
     setSaveStatus("saving");
-    isSavingRef.current = true; // Mark that we're saving - don't let polling overwrite
 
     // Debounce saves to avoid too many requests
     saveTimeoutRef.current = setTimeout(async () => {
       // Save to localStorage as backup
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
+
+      // Generate timestamp for echo deduplication
+      const saveTimestamp = new Date().toISOString();
+      lastSaveTimestampRef.current = saveTimestamp;
 
       // Save to Supabase
       try {
@@ -279,21 +357,28 @@ export default function App() {
             id: "main",
             data: data,
             connections: connections,
-            updated_at: new Date().toISOString(),
+            updated_at: saveTimestamp,
           });
 
         if (error) {
           console.error("Supabase save error:", error);
           setSaveStatus("offline");
+          // Reject all pending save promises
+          pendingSaveResolvers.current.forEach(({ reject }) => reject(new Error("Save failed")));
+          pendingSaveResolvers.current = [];
         } else {
           setSaveStatus("synced");
-          lastSaveTimeRef.current = Date.now(); // Track when save completed for race condition protection
+          // Resolve all pending save promises
+          pendingSaveResolvers.current.forEach(({ resolve }) => resolve());
+          pendingSaveResolvers.current = [];
         }
       } catch (e) {
         console.error("Failed to save to Supabase:", e);
         setSaveStatus("offline");
+        // Reject all pending save promises
+        pendingSaveResolvers.current.forEach(({ reject }) => reject(e as Error));
+        pendingSaveResolvers.current = [];
       }
-      isSavingRef.current = false; // Done saving - polling can resume
       setTimeout(() => setSaveStatus(""), 2000);
     }, 800);
 
@@ -378,15 +463,22 @@ export default function App() {
     return components;
   }, [data.components, activeFilterTags, activeMilestone, data.milestones]);
 
-  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>) => {
-    setData((prev) => ({
-      ...prev,
-      components: prev.components.map((comp) =>
-        comp.id === nodeId
-          ? { ...comp, ...updates, lastUpdated: new Date() }
-          : comp
-      ),
-    }));
+  // Returns a promise that resolves when the save completes
+  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      // Track this promise to resolve when save completes
+      pendingSaveResolvers.current.push({ resolve, reject });
+
+      // Optimistically update local state immediately
+      setData((prev) => ({
+        ...prev,
+        components: prev.components.map((comp) =>
+          comp.id === nodeId
+            ? { ...comp, ...updates, lastUpdated: new Date() }
+            : comp
+        ),
+      }));
+    });
   };
 
   const handleDeleteNode = (nodeId: string) => {
@@ -455,6 +547,7 @@ export default function App() {
   };
 
   const handleDrag = (e: React.MouseEvent) => {
+    if (isResizing) return; // Don't drag nodes while resizing the panel
     if (draggedNode) {
       setData((prev) => ({
         ...prev,
@@ -484,7 +577,7 @@ export default function App() {
 
   return (
     <div
-      className="min-h-screen bg-gray-50"
+      className="min-h-screen bg-gray-50 overflow-x-hidden"
       onMouseMove={handleDrag}
       onMouseUp={handleDragEnd}
     >
@@ -558,7 +651,10 @@ export default function App() {
       </div>
 
       {/* Export/Import Toolbar */}
-      <div className="fixed bottom-6 right-6 z-40 flex gap-2">
+      <div
+        className="fixed bottom-6 z-40 flex gap-2 transition-[right] duration-100 ease-out"
+        style={{ right: selectedNode ? `${panelWidth + 24}px` : '24px' }}
+      >
         <input
           type="file"
           ref={fileInputRef}
@@ -587,10 +683,12 @@ export default function App() {
       </div>
 
       <div
-        className="relative"
+        className="relative transition-[margin] duration-100 ease-out"
         style={{
           minHeight: "calc(100vh - 140px)",
           padding: "40px",
+          marginRight: selectedNode ? `${panelWidth}px` : "0px",
+          userSelect: isResizing ? "none" : undefined,
         }}
       >
         {/* Flow Layer - Arrows */}
@@ -707,8 +805,11 @@ export default function App() {
         onUpdateNode={handleUpdateNode}
         onDeleteNode={handleDeleteNode}
         onCreateTag={handleCreateTag}
-        onEditStart={() => { isEditingRef.current = true; }}
-        onEditEnd={() => { isEditingRef.current = false; }}
+        onEditStart={(nodeId) => { editingNodeIdRef.current = nodeId; }}
+        onEditEnd={() => { editingNodeIdRef.current = null; }}
+        width={panelWidth}
+        onResizeStart={handleResizeStart}
+        isResizing={isResizing}
       />
 
       <DiagramViewer

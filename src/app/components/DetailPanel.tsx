@@ -15,14 +15,17 @@ interface DetailPanelProps {
   tags: Tag[];
   allTags: Tag[];
   onClose: () => void;
-  onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => void;
+  onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => Promise<void>;
   onDeleteNode: (nodeId: string) => void;
   onCreateTag: (label: string, color: string) => void;
-  onEditStart?: () => void;
+  onEditStart?: (nodeId: string) => void;
   onEditEnd?: () => void;
+  width?: number;
+  onResizeStart?: (e: React.MouseEvent) => void;
+  isResizing?: boolean;
 }
 
-export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd }: DetailPanelProps) {
+export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd, width = 500, onResizeStart, isResizing = false }: DetailPanelProps) {
   const [newTagLabel, setNewTagLabel] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
   const [newComment, setNewComment] = useState('');
@@ -33,7 +36,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   // Edit states
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   // Signal edit end when panel closes or node changes
   useEffect(() => {
@@ -169,7 +172,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   };
 
   const startEdit = (field: string, currentValue: string | string[]) => {
-    onEditStart?.();
+    onEditStart?.(node.id);
     setEditingField(field);
     setEditValue(Array.isArray(currentValue) ? currentValue.join('\n') : currentValue);
   };
@@ -177,25 +180,34 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   const saveEdit = async (field: string) => {
     setSaveState('saving');
 
-    if (field === 'inputs' || field === 'outputs') {
-      const arrayValue = editValue.split('\n').filter((line) => line.trim());
-      onUpdateNode(node.id, { [field]: arrayValue });
-    } else {
-      onUpdateNode(node.id, { [field]: editValue });
+    try {
+      // Prepare the update
+      const updates = field === 'inputs' || field === 'outputs'
+        ? { [field]: editValue.split('\n').filter((line) => line.trim()) }
+        : { [field]: editValue };
+
+      // Await actual Supabase save - this resolves when save completes
+      await onUpdateNode(node.id, updates);
+
+      // Save succeeded!
+      setSaveState('saved');
+
+      // Show success for 1 second, then close edit mode
+      setTimeout(() => {
+        setSaveState('idle');
+        setEditingField(null);
+        setEditValue('');
+        onEditEnd?.();
+      }, 1000);
+    } catch (error) {
+      console.error('Save failed:', error);
+      setSaveState('error');
+
+      // Show error for 2 seconds, then reset (keep edit mode open so user can retry)
+      setTimeout(() => {
+        setSaveState('idle');
+      }, 2000);
     }
-
-    // Brief delay to show saving state
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    setSaveState('saved');
-
-    // Show success for 1 second, then close edit mode
-    setTimeout(() => {
-      setSaveState('idle');
-      setEditingField(null);
-      setEditValue('');
-      onEditEnd?.();
-    }, 1000);
   };
 
   const cancelEdit = () => {
@@ -233,7 +245,30 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
   );
 
   return (
-    <div className="fixed right-0 top-0 h-full w-[500px] border-l bg-white shadow-2xl overflow-y-auto z-50">
+    <div
+      className="fixed right-0 top-0 h-full border-l bg-white shadow-2xl overflow-y-auto z-50"
+      style={{
+        width: `${width}px`,
+        userSelect: isResizing ? 'none' : undefined,
+      }}
+    >
+      {/* Resize Handle */}
+      {onResizeStart && (
+        <div
+          onMouseDown={onResizeStart}
+          className="absolute left-0 top-0 h-full w-1.5 cursor-col-resize z-[60] group"
+          style={{ transform: 'translateX(-50%)' }}
+        >
+          {/* Visible indicator line on hover / during drag */}
+          <div
+            className={`h-full w-0.5 mx-auto transition-colors duration-150 ${
+              isResizing ? 'bg-blue-500' : 'bg-transparent group-hover:bg-blue-400'
+            }`}
+          />
+          {/* Wider invisible hit area */}
+          <div className="absolute inset-y-0 -left-1 -right-1" />
+        </div>
+      )}
       <div className="sticky top-0 bg-white border-b p-6 z-10">
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
