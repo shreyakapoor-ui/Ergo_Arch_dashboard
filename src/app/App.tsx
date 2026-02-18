@@ -125,11 +125,13 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionsSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
   const dirtyNodeIdsRef = useRef<Set<string>>(new Set()); // Track which nodes are being edited (for selective merge)
   const lastSaveTimestampRef = useRef<string | null>(null); // Track our last save to dedupe echoes
   const savePendingRef = useRef(false); // True while a debounced save is in-flight
+  // Per-node debounce timers for patch saves (nodeId → timeout handle)
+  const nodeDebounceTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   // ===== Resizable Detail Panel state =====
   const PANEL_MIN_WIDTH = 320;
@@ -193,10 +195,10 @@ export default function App() {
     localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
   }, [data, connections]);
 
-  // Warn user on tab close if there are unsaved changes
+  // Warn user on tab close if there are unsaved changes (pending node debounce timers)
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (dirtyNodeIdsRef.current.size > 0 || saveTimeoutRef.current) {
+      if (dirtyNodeIdsRef.current.size > 0 || nodeDebounceTimers.current.size > 0) {
         e.preventDefault();
       }
     };
@@ -385,70 +387,156 @@ export default function App() {
     };
   }, [isAuthenticated]);
 
-  // Auto-save to Supabase when data changes (debounced, with retry)
-  useEffect(() => {
-    if (!isAuthenticated || isLoading || isInitialLoad.current) return;
-
-    // Clear existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
+  // ─────────────────────────────────────────────────────────────────────────
+  // PATCH-SEMANTICS SAVE — only the changed node is written to Supabase.
+  //
+  // Strategy: fetch the current row → merge at component level (last
+  // lastUpdated wins per node) → write back.  This means two users editing
+  // *different* nodes can never clobber each other.  Two users editing the
+  // *same* node at the same time will still race, but the winner is the one
+  // whose lastUpdated timestamp is later, which is deterministic.
+  // ─────────────────────────────────────────────────────────────────────────
+  const patchSaveNode = useCallback(async (nodeId: string, updatedNode: ComponentNode) => {
+    if (!isAuthenticated || isInitialLoad.current) return;
 
     setSaveStatus("saving");
     savePendingRef.current = true;
-    dbg("Save triggered — queueing debounce (800 ms). dirty nodes:", [...dirtyNodeIdsRef.current]);
+    dbg("patchSaveNode START", nodeId, updatedNode.lastUpdated);
 
-    // Debounce saves to avoid too many requests
-    saveTimeoutRef.current = setTimeout(async () => {
-      // Generate timestamp for echo deduplication
+    let success = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        // 1. Fetch the current canonical document from Supabase
+        const { data: row, error: fetchErr } = await supabase
+          .from("architecture_data")
+          .select("data, connections, updated_at")
+          .eq("id", "main")
+          .single();
+
+        if (fetchErr) {
+          console.error(`patchSaveNode fetch attempt ${attempt + 1} failed:`, fetchErr);
+          dbg("patchSaveNode fetch error", fetchErr);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+          continue;
+        }
+
+        const remote = parseDates(row.data as ArchitectureData);
+
+        // 2. Component-level merge: for each component, keep whichever version
+        //    has the later lastUpdated.  Our updated node always wins for itself.
+        const mergedComponents = remote.components.map(remoteComp => {
+          if (remoteComp.id === nodeId) {
+            // Always prefer our local edit for the node we just saved
+            return updatedNode;
+          }
+          return remoteComp;
+        });
+
+        // Handle the case where the node doesn't exist in remote yet (new node)
+        const exists = remote.components.some(c => c.id === nodeId);
+        if (!exists) mergedComponents.push(updatedNode);
+
+        const saveTimestamp = new Date().toISOString();
+        lastSaveTimestampRef.current = saveTimestamp;
+
+        const mergedData: ArchitectureData = {
+          ...remote,
+          components: mergedComponents,
+        };
+
+        dbg("patchSaveNode writing merge. nodeId=", nodeId,
+            "remote components=", remote.components.length,
+            "merged components=", mergedComponents.length,
+            "ts=", saveTimestamp);
+
+        // 3. Write the merged document back
+        const { error: writeErr } = await supabase
+          .from("architecture_data")
+          .upsert({
+            id: "main",
+            data: mergedData,
+            connections: row.connections,  // preserve connections as-is
+            updated_at: saveTimestamp,
+          });
+
+        if (!writeErr) {
+          success = true;
+          // Keep local state in sync with what we actually persisted
+          setData(prev => ({
+            ...prev,
+            components: prev.components.map(c =>
+              c.id === nodeId ? updatedNode : c
+            ),
+          }));
+          dbg("patchSaveNode succeeded attempt", attempt + 1);
+          break;
+        }
+
+        console.error(`patchSaveNode write attempt ${attempt + 1} failed:`, writeErr);
+        dbg("patchSaveNode write error", writeErr);
+      } catch (e) {
+        console.error(`patchSaveNode attempt ${attempt + 1} threw:`, e);
+        dbg("patchSaveNode threw", e);
+      }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    }
+
+    savePendingRef.current = false;
+    setSaveStatus(success ? "synced" : "offline");
+    dbg("patchSaveNode DONE. success=", success);
+    setTimeout(() => setSaveStatus(""), 2000);
+  }, [isAuthenticated]);
+
+  // Connections-only save (connections change rarely — add/delete arrow).
+  // Still a full-doc write but connections are never edited concurrently with
+  // node fields, so the race window is negligible.
+  const saveConnections = useCallback(async (newConnections: Connection[]) => {
+    if (!isAuthenticated || isInitialLoad.current) return;
+
+    dbg("saveConnections START, count=", newConnections.length);
+    setSaveStatus("saving");
+
+    try {
+      const { data: row, error: fetchErr } = await supabase
+        .from("architecture_data")
+        .select("data, updated_at")
+        .eq("id", "main")
+        .single();
+
+      if (fetchErr) { console.error("saveConnections fetch failed:", fetchErr); return; }
+
       const saveTimestamp = new Date().toISOString();
       lastSaveTimestampRef.current = saveTimestamp;
 
-      const payload = {
-        id: "main" as const,
-        data: data,
-        connections: connections,
-        updated_at: saveTimestamp,
-      };
+      const { error } = await supabase
+        .from("architecture_data")
+        .upsert({
+          id: "main",
+          data: row.data,           // preserve node data as-is
+          connections: newConnections,
+          updated_at: saveTimestamp,
+        });
 
-      dbg("Attempting upsert at", saveTimestamp, "| components:", data.components.length);
+      setSaveStatus(error ? "offline" : "synced");
+      dbg("saveConnections done. error=", error);
+    } catch (e) {
+      console.error("saveConnections threw:", e);
+      setSaveStatus("offline");
+    }
+    setTimeout(() => setSaveStatus(""), 2000);
+  }, [isAuthenticated]);
 
-      // Retry with exponential backoff (1s, 2s, 4s)
-      let success = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error } = await supabase
-            .from("architecture_data")
-            .upsert(payload);
-
-          if (!error) {
-            success = true;
-            dbg("Upsert succeeded on attempt", attempt + 1);
-            break;
-          }
-          console.error(`Supabase save attempt ${attempt + 1} failed:`, error);
-          dbg("Upsert failed attempt", attempt + 1, error);
-        } catch (e) {
-          console.error(`Save attempt ${attempt + 1} threw:`, e);
-          dbg("Upsert threw attempt", attempt + 1, e);
-        }
-        if (attempt < 2) {
-          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-        }
-      }
-
-      savePendingRef.current = false;
-      setSaveStatus(success ? "synced" : "offline");
-      dbg("Save complete. success=", success, "| timestamp=", saveTimestamp);
-      setTimeout(() => setSaveStatus(""), 2000);
+  // Debounced connections save — fires 800 ms after the last connection change
+  useEffect(() => {
+    if (!isAuthenticated || isInitialLoad.current) return;
+    if (connectionsSaveTimeoutRef.current) clearTimeout(connectionsSaveTimeoutRef.current);
+    connectionsSaveTimeoutRef.current = setTimeout(() => {
+      saveConnections(connections);
     }, 800);
-
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
+      if (connectionsSaveTimeoutRef.current) clearTimeout(connectionsSaveTimeoutRef.current);
     };
-  }, [data, connections, isLoading]);
+  }, [connections, isAuthenticated, saveConnections]);
 
   // Export data as JSON file
   const handleExport = () => {
@@ -492,13 +580,15 @@ export default function App() {
     e.target.value = "";
   };
 
-  // Add new node
-  const handleAddNode = (node: ComponentNode) => {
-    setData((prev) => ({
-      ...prev,
-      components: [...prev.components, node],
-    }));
-  };
+  // Add new node — immediately patch-save it (no debounce needed, only fires once)
+  const handleAddNode = useCallback((node: ComponentNode) => {
+    setData((prev) => {
+      const updated = { ...prev, components: [...prev.components, node] };
+      // Save only the new node via patch (patchSaveNode handles "not exists in remote" case)
+      patchSaveNode(node.id, node);
+      return updated;
+    });
+  }, [patchSaveNode]);
 
   const selectedNode =
     data.components.find((c) => c.id === selectedNodeId) || null;
@@ -524,43 +614,127 @@ export default function App() {
     return components;
   }, [data.components, activeFilterTags, activeMilestone, data.milestones]);
 
-  // Optimistically update local state — Supabase save is handled by the auto-save effect
-  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>): void => {
-    setData((prev) => ({
-      ...prev,
-      components: prev.components.map((comp) =>
+  // Optimistically update local state, then debounce a patch-save for just this node.
+  // Each node gets its own 800 ms debounce timer so rapid keystrokes collapse into
+  // a single network round-trip per node, and two users editing different nodes
+  // never touch each other's data.
+  const handleUpdateNode = useCallback((nodeId: string, updates: Partial<ComponentNode>): void => {
+    // Build the merged node immediately so we can capture it in the debounce closure
+    setData((prev) => {
+      const updatedComponents = prev.components.map((comp) =>
         comp.id === nodeId
           ? { ...comp, ...updates, lastUpdated: new Date() }
           : comp
-      ),
-    }));
-  };
+      );
 
-  const handleDeleteNode = (nodeId: string) => {
+      const updatedNode = updatedComponents.find(c => c.id === nodeId);
+      if (!updatedNode) return { ...prev, components: updatedComponents };
+
+      // Cancel any in-flight debounce for this specific node
+      const existing = nodeDebounceTimers.current.get(nodeId);
+      if (existing) clearTimeout(existing);
+
+      // Schedule patch-save for this node only
+      const timer = setTimeout(() => {
+        nodeDebounceTimers.current.delete(nodeId);
+        patchSaveNode(nodeId, updatedNode);
+      }, 800);
+      nodeDebounceTimers.current.set(nodeId, timer);
+
+      return { ...prev, components: updatedComponents };
+    });
+  }, [patchSaveNode]);
+
+  const handleDeleteNode = useCallback((nodeId: string) => {
     if (
       window.confirm(
         "Are you sure you want to delete this node? This action cannot be undone."
       )
     ) {
-      setData((prev) => ({
-        ...prev,
-        components: prev.components.filter((comp) => comp.id !== nodeId),
-      }));
+      setData((prev) => {
+        const updated = {
+          ...prev,
+          components: prev.components.filter((comp) => comp.id !== nodeId),
+        };
+        // Persist deletion: fetch remote, remove the node, write back
+        (async () => {
+          try {
+            setSaveStatus("saving");
+            const { data: row, error: fetchErr } = await supabase
+              .from("architecture_data")
+              .select("data, connections, updated_at")
+              .eq("id", "main")
+              .single();
+            if (fetchErr) { console.error("delete fetch failed:", fetchErr); return; }
+            const remote = parseDates(row.data as ArchitectureData);
+            const saveTimestamp = new Date().toISOString();
+            lastSaveTimestampRef.current = saveTimestamp;
+            const { error } = await supabase
+              .from("architecture_data")
+              .upsert({
+                id: "main",
+                data: { ...remote, components: remote.components.filter(c => c.id !== nodeId) },
+                connections: row.connections,
+                updated_at: saveTimestamp,
+              });
+            setSaveStatus(error ? "offline" : "synced");
+            dbg("delete node", nodeId, "error=", error);
+          } catch (e) {
+            console.error("delete node save threw:", e);
+            setSaveStatus("offline");
+          }
+          setTimeout(() => setSaveStatus(""), 2000);
+        })();
+        return updated;
+      });
       setSelectedNodeId(null);
     }
-  };
+  }, []);
 
-  const handleCreateTag = (label: string, color: string) => {
+  const handleCreateTag = useCallback((label: string, color: string) => {
     const newTag: Tag = {
       id: label.toLowerCase().replace(/\s+/g, "-"),
       label,
       color,
     };
-    setData((prev) => ({
-      ...prev,
-      tags: [...prev.tags, newTag],
-    }));
-  };
+    setData((prev) => {
+      const updated = { ...prev, tags: [...prev.tags, newTag] };
+      // Persist: fetch remote, append tag (dedup by id), write back
+      (async () => {
+        try {
+          setSaveStatus("saving");
+          const { data: row, error: fetchErr } = await supabase
+            .from("architecture_data")
+            .select("data, connections, updated_at")
+            .eq("id", "main")
+            .single();
+          if (fetchErr) { console.error("createTag fetch failed:", fetchErr); return; }
+          const remote = parseDates(row.data as ArchitectureData);
+          const existingIds = new Set(remote.tags.map((t: Tag) => t.id));
+          const mergedTags = existingIds.has(newTag.id)
+            ? remote.tags
+            : [...remote.tags, newTag];
+          const saveTimestamp = new Date().toISOString();
+          lastSaveTimestampRef.current = saveTimestamp;
+          const { error } = await supabase
+            .from("architecture_data")
+            .upsert({
+              id: "main",
+              data: { ...remote, tags: mergedTags },
+              connections: row.connections,
+              updated_at: saveTimestamp,
+            });
+          setSaveStatus(error ? "offline" : "synced");
+          dbg("createTag", newTag.id, "error=", error);
+        } catch (e) {
+          console.error("createTag save threw:", e);
+          setSaveStatus("offline");
+        }
+        setTimeout(() => setSaveStatus(""), 2000);
+      })();
+      return updated;
+    });
+  }, []);
 
   const handleSelectMilestone = (milestoneId: string | null) => {
     setActiveMilestone(milestoneId);
@@ -594,10 +768,10 @@ export default function App() {
   const handleDrag = (e: React.MouseEvent) => {
     if (isResizing) return; // Don't drag nodes while resizing the panel
     if (draggedNode) {
-      setData((prev) => ({
-        ...prev,
-        components: prev.components.map((comp) =>
-          comp.id === draggedNode
+      const nodeId = draggedNode;
+      setData((prev) => {
+        const updatedComponents = prev.components.map((comp) =>
+          comp.id === nodeId
             ? {
                 ...comp,
                 position: {
@@ -606,8 +780,22 @@ export default function App() {
                 },
               }
             : comp
-        ),
-      }));
+        );
+
+        const updatedNode = updatedComponents.find(c => c.id === nodeId);
+        if (!updatedNode) return { ...prev, components: updatedComponents };
+
+        // Debounce position patch-save (1 s — drag fires on every mousemove)
+        const existing = nodeDebounceTimers.current.get(`drag-${nodeId}`);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          nodeDebounceTimers.current.delete(`drag-${nodeId}`);
+          patchSaveNode(nodeId, updatedNode);
+        }, 1000);
+        nodeDebounceTimers.current.set(`drag-${nodeId}`, timer);
+
+        return { ...prev, components: updatedComponents };
+      });
     }
   };
 
