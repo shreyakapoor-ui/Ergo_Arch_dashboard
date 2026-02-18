@@ -158,7 +158,13 @@ Deno.serve(async (req: Request) => {
 
   // Read secrets
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-  const FROM_EMAIL     = Deno.env.get("FROM_EMAIL") ?? "noreply@example.com";
+  // FROM_EMAIL must be a Resend-verified sender address.
+  // Until a custom domain is verified in Resend, use onboarding@resend.dev
+  // (Resend's free sandbox sender — works without domain verification,
+  //  but only delivers to the Resend account owner's email in sandbox mode).
+  // Once you verify a domain at resend.com/domains, update this to:
+  //   supabase secrets set FROM_EMAIL=notifications@yourdomain.com
+  const FROM_EMAIL = Deno.env.get("FROM_EMAIL") ?? "onboarding@resend.dev";
 
   if (!RESEND_API_KEY) {
     console.error("[notify-mentions] RESEND_API_KEY secret is not set");
@@ -191,7 +197,7 @@ Deno.serve(async (req: Request) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: FROM_EMAIL,
+            from: `Ergo Architecture <${FROM_EMAIL}>`,
             to: mention.email,
             subject,
             html,
