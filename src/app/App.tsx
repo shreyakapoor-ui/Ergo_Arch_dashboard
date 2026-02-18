@@ -814,31 +814,6 @@ export default function App() {
       onMouseMove={handleDrag}
       onMouseUp={handleDragEnd}
     >
-      {/* ===== MAINTENANCE BANNER — top of every page, cannot be missed ===== */}
-      <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 9999,
-          backgroundColor: "#b45309",   /* amber-700 */
-          color: "#ffffff",
-          padding: "10px 20px",
-          textAlign: "center",
-          fontWeight: 700,
-          fontSize: "14px",
-          letterSpacing: "0.01em",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-          borderBottom: "2px solid #92400e",
-        }}
-      >
-        ⚠️ Active app development in progress. Please close the app for the next 2 hours and reopen later.
-      </div>
-      {/* Spacer so content is not hidden behind the fixed banner */}
-      <div style={{ height: "40px" }} />
-      {/* ===== END MAINTENANCE BANNER ===== */}
-
       <ArchitectureControls
         allTags={data.tags}
         milestones={data.milestones}
