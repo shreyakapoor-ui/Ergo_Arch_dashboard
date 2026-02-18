@@ -1,21 +1,17 @@
 // =============================================================================
-// useAuth — dual-gate auth hook
+// useAuth — Google OAuth gate with 30-min inactivity timeout.
 //
-// Gate 1: Shared app password  (access barrier, NOT identity)
-// Gate 2: Google OAuth via Supabase Auth  (identity)
-//
-// Both gates must be satisfied for `fullyAuthed` to be true.
-// An inactivity timer (INACTIVITY_TIMEOUT_MS) clears both gates and forces
-// the user back to the UnlockScreen.
+// Authentication is Google OAuth only (via Supabase Auth).
+// `fullyAuthed` is true whenever a valid Supabase session exists.
+// An inactivity timer clears the session and forces the user back to the
+// sign-in screen after INACTIVITY_TIMEOUT_MS of silence.
 // =============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { User, Session } from "@supabase/supabase-js";
 import { supabase } from "../supabaseClient";
 import {
-  APP_PASSWORD,
   INACTIVITY_TIMEOUT_MS,
-  SESSION_PW_KEY,
   SESSION_LAST_ACTIVITY_KEY,
   USERS_TABLE,
 } from "./authConstants";
@@ -25,26 +21,22 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface AuthState {
-  /** True once the user has entered the correct shared app password. */
-  passwordPassed: boolean;
   /** The Supabase Auth user (Google OAuth), or null if not signed in. */
   googleUser: User | null;
-  /** True only when BOTH gates are satisfied and session is still active. */
+  /** True only when a valid Google OAuth session exists. */
   fullyAuthed: boolean;
   /** True while we are resolving the initial Supabase session on mount. */
   loading: boolean;
-  /** Non-null while Google OAuth is in flight. */
+  /** Non-null while Google OAuth redirect is in flight. */
   oauthLoading: boolean;
   /** Error string if Google sign-in fails. */
   oauthError: string | null;
 }
 
 export interface AuthActions {
-  /** Validate the shared password. Returns true on success. */
-  submitPassword: (pw: string) => boolean;
-  /** Kick off the Google OAuth flow (redirects). */
+  /** Kick off the Google OAuth flow (redirects to Google). */
   signInWithGoogle: () => Promise<void>;
-  /** Sign out of Google Auth AND clear the password gate. */
+  /** Sign out and clear the session. */
   logout: () => Promise<void>;
 }
 
@@ -53,37 +45,22 @@ export interface AuthActions {
 // ---------------------------------------------------------------------------
 
 export function useAuth(): AuthState & AuthActions {
-  // ── Gate 1: password ──────────────────────────────────────────────────────
-  const [passwordPassed, setPasswordPassed] = useState<boolean>(() => {
-    // Restore from sessionStorage so a page refresh doesn't force re-entry,
-    // but also check that the activity timestamp hasn't expired.
-    const passed = sessionStorage.getItem(SESSION_PW_KEY) === "true";
-    if (!passed) return false;
-    const lastActivity = Number(sessionStorage.getItem(SESSION_LAST_ACTIVITY_KEY) ?? "0");
-    const expired = Date.now() - lastActivity > INACTIVITY_TIMEOUT_MS;
-    return !expired;
-  });
-
-  // ── Gate 2: Google OAuth ──────────────────────────────────────────────────
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
 
-  // ── Inactivity timer ─────────────────────────────────────────────────────
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // fullyAuthed: both gates must be satisfied
-  const fullyAuthed = passwordPassed && googleUser !== null;
+  // fullyAuthed: Google session exists
+  const fullyAuthed = googleUser !== null;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /** Clear both gates and sign out of Supabase. */
+  /** Sign out of Supabase and clear local state. */
   const clearSession = useCallback(async () => {
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
-    setPasswordPassed(false);
     setGoogleUser(null);
-    sessionStorage.removeItem(SESSION_PW_KEY);
     sessionStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
     await supabase.auth.signOut();
   }, []);
@@ -111,7 +88,6 @@ export function useAuth(): AuthState & AuthActions {
       { onConflict: "id" }
     );
     if (error) {
-      // Non-fatal — @mentions will still work with email fallback
       console.warn("[auth] Could not upsert user record:", error.message);
     }
   }, []);
@@ -128,7 +104,6 @@ export function useAuth(): AuthState & AuthActions {
       setLoading(false);
     });
 
-    // Listen for auth state changes (OAuth callback, sign-out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event: string, session: Session | null) => {
         if (!mounted) return;
@@ -145,20 +120,18 @@ export function useAuth(): AuthState & AuthActions {
     };
   }, [upsertUserRecord]);
 
-  // ── Inactivity tracking — attach listeners when fully authed ──────────────
+  // ── Inactivity tracking — attach listeners when signed in ─────────────────
   useEffect(() => {
     if (!fullyAuthed) {
-      // Clean up timer when session ends
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       return;
     }
 
     const EVENTS = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
-
     const onActivity = () => resetInactivityTimer();
 
     EVENTS.forEach(ev => window.addEventListener(ev, onActivity, { passive: true }));
-    resetInactivityTimer(); // start the clock immediately
+    resetInactivityTimer();
 
     return () => {
       EVENTS.forEach(ev => window.removeEventListener(ev, onActivity));
@@ -168,17 +141,6 @@ export function useAuth(): AuthState & AuthActions {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  const submitPassword = useCallback((pw: string): boolean => {
-    // ⚠️  Client-side comparison. See authConstants.ts for migration path.
-    if (pw === APP_PASSWORD) {
-      sessionStorage.setItem(SESSION_PW_KEY, "true");
-      sessionStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(Date.now()));
-      setPasswordPassed(true);
-      return true;
-    }
-    return false;
-  }, []);
-
   const signInWithGoogle = useCallback(async () => {
     setOauthLoading(true);
     setOauthError(null);
@@ -187,7 +149,6 @@ export function useAuth(): AuthState & AuthActions {
       options: {
         redirectTo: window.location.origin,
         queryParams: {
-          // Request profile + email scopes
           access_type: "offline",
           prompt: "select_account",
         },
@@ -197,7 +158,6 @@ export function useAuth(): AuthState & AuthActions {
       setOauthError(error.message);
       setOauthLoading(false);
     }
-    // On success the browser redirects; onAuthStateChange handles the callback.
   }, []);
 
   const logout = useCallback(async () => {
@@ -205,13 +165,11 @@ export function useAuth(): AuthState & AuthActions {
   }, [clearSession]);
 
   return {
-    passwordPassed,
     googleUser,
     fullyAuthed,
     loading,
     oauthLoading,
     oauthError,
-    submitPassword,
     signInWithGoogle,
     logout,
   };

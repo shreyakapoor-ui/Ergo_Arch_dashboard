@@ -94,15 +94,13 @@ function loadLocalConnections(): Connection[] {
 }
 
 export default function App() {
-  // ── Dual-gate auth (password + Google OAuth) with inactivity timeout ──────
+  // ── Google OAuth auth with inactivity timeout ──────────────────────────────
   const {
-    passwordPassed,
     googleUser,
     fullyAuthed,
     loading: authLoading,
     oauthLoading,
     oauthError,
-    submitPassword,
     signInWithGoogle,
     logout,
   } = useAuth();
@@ -807,20 +805,16 @@ export default function App() {
   // While Supabase resolves the existing OAuth session, show nothing (avoids flash)
   if (authLoading) return null;
 
-  // Show unlock screen until both gates are satisfied
+  // Show sign-in screen until Google OAuth session exists
   if (!fullyAuthed) {
     return (
       <UnlockScreen
-        passwordPassed={passwordPassed}
         googleUser={googleUser}
         oauthLoading={oauthLoading}
         oauthError={oauthError}
-        submitPassword={submitPassword}
         signInWithGoogle={signInWithGoogle}
         onEnter={() => {
-          // fullyAuthed is already true at this point; onEnter just forces
-          // a re-render so the main app mounts immediately on button click.
-          // No additional state needed — useAuth drives everything.
+          // Auto-handled by UnlockScreen useEffect; no extra state needed.
         }}
       />
     );
