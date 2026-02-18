@@ -212,8 +212,11 @@ export default function App() {
 
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
-    // Skip if not authenticated
-    if (!isAuthenticated) return;
+    // If auth resolved but user is not authenticated, stop the loading spinner
+    if (!isAuthenticated) {
+      setIsLoading(false);
+      return;
+    }
 
     let lastUpdatedAt: string | null = null;
 
@@ -807,8 +810,15 @@ export default function App() {
     setDraggedNode(null);
   };
 
-  // While Supabase resolves the existing OAuth session, show nothing (avoids flash)
-  if (authLoading) return null;
+  // While Supabase resolves the existing OAuth session, show a spinner (not blank)
+  if (authLoading) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-600" />
+        <p className="text-gray-500 text-sm">Loading…</p>
+      </div>
+    </div>
+  );
 
   // Show sign-in screen until Google OAuth session exists (or if domain/access denied)
   if (!fullyAuthed) {
