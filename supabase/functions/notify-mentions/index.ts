@@ -7,7 +7,6 @@
 // Required Supabase secrets (set with `supabase secrets set`):
 //   RESEND_API_KEY   — your Resend API key (re_xxxxxxxx)
 //   FROM_EMAIL       — verified sender address, e.g. "noreply@yourdomain.com"
-//   APP_URL          — canonical app URL for deep links, e.g. "https://your-app.vercel.app"
 //
 // Request body (JSON):
 //   {
@@ -26,7 +25,7 @@
 //   { sent: number; errors: string[] }
 // =============================================================================
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// Supabase Edge Functions run on Deno Deploy — use Deno.serve (no import needed).
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,25 +53,28 @@ interface RequestBody {
 // Email builder
 // ---------------------------------------------------------------------------
 
+const FIELD_LABELS: Record<string, string> = {
+  comment:             "a comment",
+  weekly_update:       "a weekly update",
+  description:         "the purpose / description",
+  blockers:            "the blockers section",
+  remaining_mvp_scope: "the remaining MVP scope",
+  future_scope:        "the future scope",
+  inputs:              "the inputs",
+  outputs:             "the outputs",
+};
+
 function buildEmailHtml(
   recipientName: string,
   mentioner: { name: string; email: string },
   context: RequestBody["context"]
 ): string {
-  const fieldLabel: Record<string, string> = {
-    comment: "a comment",
-    weekly_update: "a weekly update",
-    description: "the description",
-    blockers: "the blockers section",
-    remaining_mvp_scope: "the remaining MVP scope",
-  };
-  const where = fieldLabel[context.field] ?? context.field;
+  const where = FIELD_LABELS[context.field] ?? context.field;
   const snippet = context.label
-    ? `<blockquote style="border-left:3px solid #e5e7eb;margin:12px 0;padding:8px 12px;color:#6b7280;font-style:italic;">${context.label}</blockquote>`
+    ? `<blockquote style="border-left:3px solid #e5e7eb;margin:12px 0;padding:8px 12px;color:#6b7280;font-style:italic;">${context.label.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</blockquote>`
     : "";
 
-  return `
-<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#111827;">
@@ -92,33 +94,38 @@ function buildEmailHtml(
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
   <p style="color:#9ca3af;font-size:12px;">
     You received this email because you were @mentioned in the Ergo Overwatch
-    Architecture dashboard. Reply to this email or open the app to respond.
+    Architecture dashboard.
   </p>
 </body>
-</html>
-  `.trim();
+</html>`.trim();
 }
+
+// ---------------------------------------------------------------------------
+// CORS headers
+// ---------------------------------------------------------------------------
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   // CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-      },
-    });
+    return new Response(null, { headers: CORS_HEADERS });
   }
 
   // Only accept POST
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
   }
 
@@ -129,28 +136,35 @@ serve(async (req: Request) => {
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
   }
 
   const { mentions, mentioner, context } = body;
 
-  if (!mentions?.length || !mentioner || !context) {
+  if (!Array.isArray(mentions) || !mentioner || !context) {
     return new Response(
       JSON.stringify({ error: "Missing required fields: mentions, mentioner, context" }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
+      { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
     );
   }
 
-  // Read secrets from Deno environment
+  if (mentions.length === 0) {
+    return new Response(
+      JSON.stringify({ sent: 0, errors: [] }),
+      { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
+    );
+  }
+
+  // Read secrets
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
   const FROM_EMAIL     = Deno.env.get("FROM_EMAIL") ?? "noreply@example.com";
 
   if (!RESEND_API_KEY) {
     console.error("[notify-mentions] RESEND_API_KEY secret is not set");
     return new Response(
-      JSON.stringify({ error: "Email provider not configured (missing RESEND_API_KEY)" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Email provider not configured — RESEND_API_KEY secret missing" }),
+      { status: 500, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
     );
   }
 
@@ -160,8 +174,14 @@ serve(async (req: Request) => {
 
   await Promise.all(
     mentions.map(async (mention) => {
+      if (!mention.email) {
+        errors.push(`Skipped user ${mention.user_id}: no email`);
+        return;
+      }
+
       const html = buildEmailHtml(mention.name, mentioner, context);
       const subject = `${mentioner.name} mentioned you in "${context.node_name}"`;
+      const plainText = `Hi ${mention.name},\n\n${mentioner.name} (${mentioner.email}) mentioned you in "${context.node_name}".\n\nContext: ${context.label}\n\nOpen: ${context.deep_link}`;
 
       try {
         const res = await fetch("https://api.resend.com/emails", {
@@ -175,18 +195,18 @@ serve(async (req: Request) => {
             to: mention.email,
             subject,
             html,
-            // Include plain-text fallback
-            text: `Hi ${mention.name},\n\n${mentioner.name} (${mentioner.email}) mentioned you in "${context.node_name}".\n\nOpen: ${context.deep_link}`,
+            text: plainText,
           }),
         });
 
+        const responseText = await res.text();
+
         if (!res.ok) {
-          const errText = await res.text();
-          console.error(`[notify-mentions] Resend error for ${mention.email}:`, errText);
-          errors.push(`${mention.email}: ${res.status} ${errText}`);
+          console.error(`[notify-mentions] Resend error for ${mention.email}: ${res.status} ${responseText}`);
+          errors.push(`${mention.email}: HTTP ${res.status} — ${responseText}`);
         } else {
           sent.push(mention.email);
-          console.log(`[notify-mentions] Sent to ${mention.email}`);
+          console.log(`[notify-mentions] ✓ Sent to ${mention.email}`);
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -196,14 +216,13 @@ serve(async (req: Request) => {
     })
   );
 
+  const allFailed = errors.length > 0 && sent.length === 0;
+
   return new Response(
     JSON.stringify({ sent: sent.length, errors }),
     {
-      status: errors.length > 0 && sent.length === 0 ? 500 : 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+      status: allFailed ? 500 : 200,
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     }
   );
 });

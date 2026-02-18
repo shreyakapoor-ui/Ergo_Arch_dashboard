@@ -33,7 +33,10 @@ export type MentionField =
   | "weekly_update"
   | "description"
   | "blockers"
-  | "remaining_mvp_scope";
+  | "remaining_mvp_scope"
+  | "future_scope"
+  | "inputs"
+  | "outputs";
 
 interface UseMentionsOptions {
   contextType: "node";
