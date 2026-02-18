@@ -180,19 +180,32 @@ export function useAuth(): AuthState & AuthActions {
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!mounted) return;
-      const user = session?.user ?? null;
-      setGoogleUser(user);
-      if (user) await resolveUserAccess(user);
-      setLoading(false);
+      try {
+        const user = session?.user ?? null;
+        setGoogleUser(user);
+        if (user) await resolveUserAccess(user);
+      } catch (e) {
+        console.error("[auth] Bootstrap error:", e);
+      } finally {
+        if (mounted) setLoading(false);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event: string, session: Session | null) => {
         if (!mounted) return;
-        const user = session?.user ?? null;
-        setGoogleUser(user);
-        if (user) await resolveUserAccess(user);
-        setOauthLoading(false);
+        try {
+          const user = session?.user ?? null;
+          setGoogleUser(user);
+          if (user) await resolveUserAccess(user);
+        } catch (e) {
+          console.error("[auth] onAuthStateChange error:", e);
+        } finally {
+          if (mounted) {
+            setOauthLoading(false);
+            setLoading(false);
+          }
+        }
       }
     );
 

@@ -49,7 +49,16 @@ create policy "Admins can read all roles"
     )
   );
 
--- Only admins can insert new rows (add members / admins)
+-- Any authenticated user can insert their OWN row as 'member' (self-provisioning on first login)
+create policy "Users can self-provision their own role row"
+  on public.user_roles
+  for insert
+  with check (
+    email = (select email from auth.users where id = auth.uid())
+    and role = 'member'
+  );
+
+-- Admins can insert any row (add members / admins via User Management Panel)
 create policy "Admins can insert roles"
   on public.user_roles
   for insert
