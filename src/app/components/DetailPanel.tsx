@@ -7,19 +7,24 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { format } from 'date-fns';
+import type { User } from '@supabase/supabase-js';
+import { MentionTextarea, type MentionedUser } from './MentionTextarea';
+import { useMentions } from '../hooks/useMentions';
 
 type PanelTab = 'mvp' | 'future' | 'discussion';
 
 interface DetailPanelProps {
   node: ComponentNode | null;
   tags: Tag[];
+  /** Signed-in Google user — needed to attribute mentions. */
+  googleUser?: User | null;
   allTags: Tag[];
   onClose: () => void;
-  onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => Promise<void>;
+  onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => void;
   onDeleteNode: (nodeId: string) => void;
   onCreateTag: (label: string, color: string) => void;
   onEditStart?: (nodeId: string) => void;
-  onEditEnd?: () => void;
+  onEditEnd?: (nodeId?: string) => void;
   width?: number;
   onResizeStart?: (e: React.MouseEvent) => void;
   isResizing?: boolean;
@@ -139,12 +144,16 @@ function migrateWeeklyUpdates(node: ComponentNode): WeeklyUpdate[] {
 }
 
 // ─── Main Component ─────────────────────────────────────────────────
-export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd, width = 500, onResizeStart, isResizing = false }: DetailPanelProps) {
+export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd, width = 500, onResizeStart, isResizing = false, googleUser = null }: DetailPanelProps) {
   // ── Shared state ──
   const [newTagLabel, setNewTagLabel] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
   const [newComment, setNewComment] = useState('');
   const [commentAuthor, setCommentAuthor] = useState('');
+  // Mentions tracked inside the new-comment textarea
+  const [newCommentMentions, setNewCommentMentions] = useState<MentionedUser[]>([]);
+  // Mentions tracked inside the currently-editing weekly update textarea
+  const [editingUpdateMentions, setEditingUpdateMentions] = useState<MentionedUser[]>([]);
   const [showTagCreator, setShowTagCreator] = useState(false);
   const [activeTab, setActiveTab] = useState<PanelTab>('mvp');
 
@@ -173,20 +182,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
 
   const prevNodeIdRef = useRef<string | null>(null);
   const newUpdateRef = useRef<HTMLDivElement | null>(null);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // ── Debounced auto-save helper ──
-  const debouncedSave = useCallback((nodeId: string, updates: Partial<ComponentNode>) => {
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      onEditStart?.(nodeId);
-      onUpdateNode(nodeId, updates).then(() => {
-        onEditEnd?.();
-      }).catch(() => {
-        onEditEnd?.();
-      });
-    }, 800);
-  }, [onUpdateNode, onEditStart, onEditEnd]);
+  // No client-side debounce — App.tsx auto-save effect handles debouncing to Supabase
 
   // ── Reset state when node changes ──
   useEffect(() => {
@@ -209,10 +205,10 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
       // If there were legacy fields to migrate, persist once
       if (migrated.length > 0 && (!node.weeklyUpdates || node.weeklyUpdates.length === 0)) {
         onEditStart?.(node.id);
-        onUpdateNode(node.id, { weeklyUpdates: migrated }).then(() => {
-          setUpdatesMigrated(true);
-          onEditEnd?.();
-        }).catch(() => onEditEnd?.());
+        onUpdateNode(node.id, { weeklyUpdates: migrated });
+        setUpdatesMigrated(true);
+        // Clear dirty after save debounce + network round-trip
+        setTimeout(() => onEditEnd?.(node.id), 3000);
       } else {
         setUpdatesMigrated(true);
       }
@@ -251,19 +247,48 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
 
   // Cleanup edit lock on unmount / node change
   useEffect(() => {
-    return () => { onEditEnd?.(); };
+    const currentNodeId = node?.id;
+    return () => { if (currentNodeId) onEditEnd?.(currentNodeId); };
   }, [node?.id, onEditEnd]);
+
+  // ── useMentions for the comment field ─────────────────────────────────────
+  // Each comment gets its own mention context keyed by comment id at save time.
+  // We use the node id + "comment" as a stable context for the *new* comment.
+  const { saveMentions: saveCommentMentions } = useMentions({
+    contextType: "node",
+    contextId: node?.id ?? "",
+    field: "comment",
+    currentUser: googleUser,
+    nodeName: node?.name,
+  });
+
+  // ── useMentions for weekly update field ────────────────────────────────────
+  const { saveMentions: saveUpdateMentions } = useMentions({
+    contextType: "node",
+    contextId: node?.id ?? "",
+    field: "weekly_update",
+    currentUser: googleUser,
+    nodeName: node?.name,
+  });
 
   if (!node) return null;
 
   const nodeTags = tags.filter((t) => node.tags.includes(t.id));
 
+  // ── Protected update: marks node dirty during save window to prevent remote overwrite ──
+  const protectedUpdate = (nodeId: string, updates: Partial<ComponentNode>) => {
+    onEditStart?.(nodeId);
+    onUpdateNode(nodeId, updates);
+    // Clear dirty after save debounce (800ms) + network round-trip buffer
+    setTimeout(() => onEditEnd?.(nodeId), 3000);
+  };
+
   // ── Tag handlers ──
   const handleAddTag = (tagId: string) => {
-    if (!node.tags.includes(tagId)) onUpdateNode(node.id, { tags: [...node.tags, tagId] });
+    if (!node.tags.includes(tagId)) protectedUpdate(node.id, { tags: [...node.tags, tagId] });
   };
   const handleRemoveTag = (tagId: string) => {
-    onUpdateNode(node.id, { tags: node.tags.filter((t) => t !== tagId) });
+    protectedUpdate(node.id, { tags: node.tags.filter((t) => t !== tagId) });
   };
   const handleCreateTag = () => {
     if (newTagLabel.trim()) {
@@ -285,19 +310,30 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
         text: newComment,
         author: commentAuthor,
         timestamp: new Date(),
-        mentions: extractMentions(newComment),
+        // Merge structured mention names with any legacy @word matches
+        mentions: newCommentMentions.length > 0
+          ? newCommentMentions.map(m => m.name)
+          : extractMentions(newComment),
         status: 'open',
       };
-      onUpdateNode(node.id, { comments: [...node.comments, comment] });
+      protectedUpdate(node.id, { comments: [...node.comments, comment] });
+
+      // Persist mentions + fire email notifications for net-new mentions
+      saveCommentMentions({
+        currentMentions: newCommentMentions,
+        contextLabel: newComment.slice(0, 120),
+      });
+
       setNewComment('');
+      setNewCommentMentions([]);
     }
   };
   const handleUpdateCommentStatus = (commentId: string, status: Comment['status']) => {
     const updatedComments = node.comments.map((c) => c.id === commentId ? { ...c, status } : c);
-    onUpdateNode(node.id, { comments: updatedComments });
+    protectedUpdate(node.id, { comments: updatedComments });
   };
   const handleDeleteComment = (commentId: string) => {
-    onUpdateNode(node.id, { comments: node.comments.filter((c) => c.id !== commentId) });
+    protectedUpdate(node.id, { comments: node.comments.filter((c) => c.id !== commentId) });
   };
 
   // ── Weekly Update handlers ──
@@ -311,45 +347,41 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
     setTimeout(() => newUpdateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
   };
 
-  const handleSaveWeeklyUpdate = async (updateId: string) => {
+  const handleSaveWeeklyUpdate = (updateId: string) => {
     const updated = localUpdates.map((u) =>
       u.id === updateId ? { ...u, text: editingUpdateText, date: editingUpdateDate } : u
     );
     setLocalUpdates(updated);
     setEditingUpdateId(null);
     onEditStart?.(node.id);
-    try {
-      await onUpdateNode(node.id, { weeklyUpdates: updated });
-    } finally {
-      onEditEnd?.();
-    }
+    onUpdateNode(node.id, { weeklyUpdates: updated });
+    setTimeout(() => onEditEnd?.(node.id), 3000);
+
+    // Persist + notify mentions in this weekly update
+    saveUpdateMentions({
+      currentMentions: editingUpdateMentions,
+      contextLabel: editingUpdateText.slice(0, 120),
+    });
+    setEditingUpdateMentions([]);
   };
 
-  const handleDeleteWeeklyUpdate = async (updateId: string) => {
+  const handleDeleteWeeklyUpdate = (updateId: string) => {
     if (!window.confirm('Delete this weekly update?')) return;
     const updated = localUpdates.filter((u) => u.id !== updateId);
     setLocalUpdates(updated);
     onEditStart?.(node.id);
-    try {
-      await onUpdateNode(node.id, { weeklyUpdates: updated });
-    } finally {
-      onEditEnd?.();
-    }
+    onUpdateNode(node.id, { weeklyUpdates: updated });
+    setTimeout(() => onEditEnd?.(node.id), 3000);
   };
 
   // ── Future Scope save ──
-  const handleSaveFutureScope = async () => {
+  const handleSaveFutureScope = () => {
     setFutureScopeSaveState('saving');
     onEditStart?.(node.id);
-    try {
-      await onUpdateNode(node.id, { futureScope: futureScopeDraft });
-      setFutureScopeSaveState('saved');
-      setFutureScopeDirty(false);
-      setTimeout(() => { setFutureScopeSaveState('idle'); onEditEnd?.(); }, 1000);
-    } catch {
-      setFutureScopeSaveState('error');
-      setTimeout(() => setFutureScopeSaveState('idle'), 2000);
-    }
+    onUpdateNode(node.id, { futureScope: futureScopeDraft });
+    setFutureScopeSaveState('saved');
+    setFutureScopeDirty(false);
+    setTimeout(() => { setFutureScopeSaveState('idle'); onEditEnd?.(node.id); }, 1500);
   };
 
   // ── Status helpers ──
@@ -377,26 +409,21 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
     setEditValue(Array.isArray(currentValue) ? currentValue.join('\n') : currentValue);
   };
 
-  const saveEdit = async (field: string) => {
+  const saveEdit = (field: string) => {
     setSaveState('saving');
-    try {
-      const updates = field === 'inputs' || field === 'outputs'
-        ? { [field]: editValue.split('\n').filter((line) => line.trim()) }
-        : { [field]: editValue };
-      await onUpdateNode(node.id, updates);
-      setSaveState('saved');
-      setTimeout(() => { setSaveState('idle'); setEditingField(null); setEditValue(''); onEditEnd?.(); }, 1000);
-    } catch {
-      setSaveState('error');
-      setTimeout(() => setSaveState('idle'), 2000);
-    }
+    const updates = field === 'inputs' || field === 'outputs'
+      ? { [field]: editValue.split('\n').filter((line: string) => line.trim()) }
+      : { [field]: editValue };
+    onUpdateNode(node.id, updates);
+    setSaveState('saved');
+    setTimeout(() => { setSaveState('idle'); setEditingField(null); setEditValue(''); onEditEnd?.(node.id); }, 1000);
   };
 
   const cancelEdit = () => {
     setEditingField(null);
     setEditValue('');
     setSaveState('idle');
-    onEditEnd?.();
+    onEditEnd?.(node.id);
   };
 
   // ── Save Button ──
@@ -712,11 +739,12 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                             onChange={(e) => setEditingUpdateDate(e.target.value)}
                             className="text-xs h-7 w-40"
                           />
-                          <Textarea
+                          <MentionTextarea
                             value={editingUpdateText}
-                            onChange={(e) => setEditingUpdateText(e.target.value)}
-                            placeholder="What happened this week?"
-                            className="text-sm min-h-[80px]"
+                            onChange={setEditingUpdateText}
+                            onMentionsChange={setEditingUpdateMentions}
+                            placeholder="What happened this week? Type @ to mention someone."
+                            className="min-h-[80px]"
                             autoFocus
                           />
                           <div className="flex gap-2">
@@ -760,15 +788,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   onChange={(e) => {
                     setRemainingDraft(e.target.value);
                     setRemainingDirty(true);
-                    debouncedSave(node.id, { remainingMvpScope: e.target.value });
+                    onEditStart?.(node.id);
+                    onUpdateNode(node.id, { remainingMvpScope: e.target.value });
                   }}
                   onBlur={() => {
                     if (remainingDirty) {
-                      onEditStart?.(node.id);
-                      onUpdateNode(node.id, { remainingMvpScope: remainingDraft }).then(() => {
-                        setRemainingDirty(false);
-                        onEditEnd?.();
-                      }).catch(() => onEditEnd?.());
+                      setRemainingDirty(false);
+                      onEditEnd?.(node.id);
                     }
                   }}
                   placeholder="What's left to ship in Q1?"
@@ -791,15 +817,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   onChange={(e) => {
                     setBlockersDraft(e.target.value);
                     setBlockersDirty(true);
-                    debouncedSave(node.id, { blockers: e.target.value });
+                    onEditStart?.(node.id);
+                    onUpdateNode(node.id, { blockers: e.target.value });
                   }}
                   onBlur={() => {
                     if (blockersDirty) {
-                      onEditStart?.(node.id);
-                      onUpdateNode(node.id, { blockers: blockersDraft }).then(() => {
-                        setBlockersDirty(false);
-                        onEditEnd?.();
-                      }).catch(() => onEditEnd?.());
+                      setBlockersDirty(false);
+                      onEditEnd?.(node.id);
                     }
                   }}
                   placeholder="Current risks, blockers, or issues..."
@@ -879,7 +903,14 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
 
             <div className="space-y-2 border-t pt-3">
               <Input placeholder="Your name" value={commentAuthor} onChange={(e) => setCommentAuthor(e.target.value)} className="text-sm h-8" />
-              <Textarea placeholder="Add a comment or question... (use @name to mention)" value={newComment} onChange={(e) => setNewComment(e.target.value)} className="text-sm min-h-[70px]" />
+              <MentionTextarea
+                value={newComment}
+                onChange={setNewComment}
+                onMentionsChange={setNewCommentMentions}
+                placeholder="Add a comment or question… type @ to mention someone"
+                rows={3}
+                className="min-h-[70px]"
+              />
               <Button size="sm" onClick={handleAddComment} className="w-full h-8 text-xs">
                 <Send className="h-3 w-3 mr-1" /> Add Comment
               </Button>

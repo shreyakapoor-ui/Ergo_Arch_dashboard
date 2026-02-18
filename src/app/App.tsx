@@ -1074,6 +1074,7 @@ export default function App() {
         width={panelWidth}
         onResizeStart={handleResizeStart}
         isResizing={isResizing}
+        googleUser={googleUser}
       />
 
       <DiagramViewer
