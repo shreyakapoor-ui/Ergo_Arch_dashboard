@@ -11,27 +11,18 @@ import { ArchitectureControls } from "./components/ArchitectureControls";
 import { DiagramViewer } from "./components/DiagramViewer";
 import { RoadmapViewer } from "./components/RoadmapViewer";
 import { Button } from "./components/ui/button";
-import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, Cloud, CloudOff, Users } from "lucide-react";
+import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, LogOut } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
 import { AddNodeDialog } from "./components/AddNodeDialog";
-import { PasswordGate } from "./components/PasswordGate";
-import { createClient } from "@supabase/supabase-js";
+import { UnlockScreen } from "./components/UnlockScreen";
+import { supabase } from "./supabaseClient";
+import { useAuth } from "./auth/useAuth";
 
-// ===========================================
-// SUPABASE CONFIGURATION (Real-time sync)
-// ===========================================
-
-// DEBUG flag: set to true (or add ?debug=1 to URL) to get verbose save/sync logs
+// DEBUG flag: append ?debug=1 to URL for verbose save/sync logs
 const DEBUG_SAVE = typeof window !== "undefined"
   ? window.location.search.includes("debug=1")
   : false;
 const dbg = (...args: unknown[]) => { if (DEBUG_SAVE) console.log("[SAVE-DEBUG]", ...args); };
-
-const SUPABASE_URL = "https://ywnvnwsziqjhauyqgzjt.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3bnZud3N6aXFqaGF1eXFnemp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyNjUxODQsImV4cCI6MjA4NTg0MTE4NH0.VqANIUQSYsyAwTSZUIq7K_xFdd00iG0wiIT8U8bV_9o";
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// ===========================================
 
 const STORAGE_KEY = "architecture-data";
 const CONNECTIONS_KEY = "architecture-connections";
@@ -103,10 +94,21 @@ function loadLocalConnections(): Connection[] {
 }
 
 export default function App() {
-  // Check if already authenticated
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return sessionStorage.getItem('arch-authenticated') === 'true';
-  });
+  // ── Dual-gate auth (password + Google OAuth) with inactivity timeout ──────
+  const {
+    passwordPassed,
+    googleUser,
+    fullyAuthed,
+    loading: authLoading,
+    oauthLoading,
+    oauthError,
+    submitPassword,
+    signInWithGoogle,
+    logout,
+  } = useAuth();
+
+  // Convenience alias used throughout the rest of the file (replaces old isAuthenticated)
+  const isAuthenticated = fullyAuthed;
 
   const [data, setData] = useState<ArchitectureData>(loadLocalData);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -123,7 +125,6 @@ export default function App() {
   const [showAddNode, setShowAddNode] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "synced" | "offline" | "realtime" | "">("");
   const [isLoading, setIsLoading] = useState(true);
-  const [onlineUsers, setOnlineUsers] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const connectionsSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
@@ -803,9 +804,26 @@ export default function App() {
     setDraggedNode(null);
   };
 
-  // Show password gate if not authenticated
-  if (!isAuthenticated) {
-    return <PasswordGate onSuccess={() => setIsAuthenticated(true)} />;
+  // While Supabase resolves the existing OAuth session, show nothing (avoids flash)
+  if (authLoading) return null;
+
+  // Show unlock screen until both gates are satisfied
+  if (!fullyAuthed) {
+    return (
+      <UnlockScreen
+        passwordPassed={passwordPassed}
+        googleUser={googleUser}
+        oauthLoading={oauthLoading}
+        oauthError={oauthError}
+        submitPassword={submitPassword}
+        signInWithGoogle={signInWithGoogle}
+        onEnter={() => {
+          // fullyAuthed is already true at this point; onEnter just forces
+          // a re-render so the main app mounts immediately on button click.
+          // No additional state needed — useAuth drives everything.
+        }}
+      />
+    );
   }
 
   return (
@@ -844,7 +862,7 @@ export default function App() {
       )}
 
 
-      {/* Toolbar - moved to left side, higher up to not overlap with anything */}
+      {/* Toolbar - left side */}
       <div className="fixed bottom-6 left-6 z-40 flex flex-col gap-2 bg-white/90 p-2 rounded-lg shadow-lg">
         <Button
           variant="default"
@@ -876,6 +894,24 @@ export default function App() {
           <Plus className="h-5 w-5 mr-2" />
           Add Arrow
         </Button>
+
+        {/* ── Logout ── */}
+        <div className="border-t border-gray-200 pt-2 mt-1">
+          {googleUser && (
+            <p className="text-[10px] text-gray-400 text-center mb-1 truncate px-1 max-w-[160px]">
+              {googleUser.user_metadata?.full_name ?? googleUser.email}
+            </p>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={logout}
+            className="w-full text-gray-500 hover:text-red-600 hover:bg-red-50 gap-2"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </Button>
+        </div>
       </div>
 
       {/* Export/Import Toolbar */}
