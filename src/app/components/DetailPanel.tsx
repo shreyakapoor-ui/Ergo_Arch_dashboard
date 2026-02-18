@@ -613,13 +613,17 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   {editingField === 'description' ? (
                     <div className="space-y-2">
                       <Textarea value={editValue} onChange={(e) => setEditValue(e.target.value)} className="text-sm min-h-[80px]" />
+                      <AttachmentList contextType="node" contextId={node.id} field="description" currentUser={googleUser} />
                       <div className="flex gap-2">
                         <SaveButton onClick={() => saveEdit('description')} />
                         <Button size="sm" variant="outline" onClick={cancelEdit}>Cancel</Button>
                       </div>
                     </div>
                   ) : (
-                    <FormattedText text={node.description} />
+                    <>
+                      <FormattedText text={node.description} />
+                      <AttachmentList contextType="node" contextId={node.id} field="description" currentUser={googleUser} readOnly />
+                    </>
                   )}
                 </div>
 
@@ -637,18 +641,22 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                     {editingField === 'inputs' ? (
                       <div className="space-y-2">
                         <Textarea value={editValue} onChange={(e) => setEditValue(e.target.value)} placeholder="One per line" className="text-sm min-h-[60px]" />
+                        <AttachmentList contextType="node" contextId={node.id} field="inputs" currentUser={googleUser} />
                         <div className="flex gap-2">
                           <SaveButton onClick={() => saveEdit('inputs')} />
                           <Button size="sm" variant="outline" onClick={cancelEdit}>Cancel</Button>
                         </div>
                       </div>
                     ) : (
-                      <ul className="text-sm space-y-0.5">
-                        {node.inputs.map((input, i) => (
-                          <li key={i} className="text-gray-600 text-xs">• {input}</li>
-                        ))}
-                        {node.inputs.length === 0 && <li className="text-gray-400 text-xs italic">None</li>}
-                      </ul>
+                      <>
+                        <ul className="text-sm space-y-0.5">
+                          {node.inputs.map((input, i) => (
+                            <li key={i} className="text-gray-600 text-xs">• {input}</li>
+                          ))}
+                          {node.inputs.length === 0 && <li className="text-gray-400 text-xs italic">None</li>}
+                        </ul>
+                        <AttachmentList contextType="node" contextId={node.id} field="inputs" currentUser={googleUser} readOnly />
+                      </>
                     )}
                   </div>
                   <div className="group/field">
@@ -663,18 +671,22 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                     {editingField === 'outputs' ? (
                       <div className="space-y-2">
                         <Textarea value={editValue} onChange={(e) => setEditValue(e.target.value)} placeholder="One per line" className="text-sm min-h-[60px]" />
+                        <AttachmentList contextType="node" contextId={node.id} field="outputs" currentUser={googleUser} />
                         <div className="flex gap-2">
                           <SaveButton onClick={() => saveEdit('outputs')} />
                           <Button size="sm" variant="outline" onClick={cancelEdit}>Cancel</Button>
                         </div>
                       </div>
                     ) : (
-                      <ul className="text-sm space-y-0.5">
-                        {node.outputs.map((output, i) => (
-                          <li key={i} className="text-gray-600 text-xs">• {output}</li>
-                        ))}
-                        {node.outputs.length === 0 && <li className="text-gray-400 text-xs italic">None</li>}
-                      </ul>
+                      <>
+                        <ul className="text-sm space-y-0.5">
+                          {node.outputs.map((output, i) => (
+                            <li key={i} className="text-gray-600 text-xs">• {output}</li>
+                          ))}
+                          {node.outputs.length === 0 && <li className="text-gray-400 text-xs italic">None</li>}
+                        </ul>
+                        <AttachmentList contextType="node" contextId={node.id} field="outputs" currentUser={googleUser} readOnly />
+                      </>
                     )}
                   </div>
                 </div>
@@ -864,6 +876,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   className="text-sm min-h-[100px] resize-y border-0 shadow-none focus-visible:ring-0 p-0"
                 />
                 {remainingDirty && <span className="text-[10px] text-amber-500 mt-1">Unsaved</span>}
+                <AttachmentList contextType="node" contextId={node.id} field="remaining_mvp_scope" currentUser={googleUser} />
               </div>
             </CollapsibleSection>
 
@@ -893,6 +906,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                   className="text-sm min-h-[80px] resize-y border-0 shadow-none focus-visible:ring-0 p-0"
                 />
                 {blockersDirty && <span className="text-[10px] text-amber-500 mt-1">Unsaved</span>}
+                <AttachmentList contextType="node" contextId={node.id} field="blockers" currentUser={googleUser} />
               </div>
             </CollapsibleSection>
           </div>
@@ -914,6 +928,7 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
               placeholder="Ideas, enhancements, and work beyond Q1 MVP."
               className="text-sm min-h-[240px] resize-y"
             />
+            <AttachmentList contextType="node" contextId={node.id} field="future_scope" currentUser={googleUser} />
             <div className="flex items-center gap-3">
               <SaveButton onClick={handleSaveFutureScope} currentSaveState={futureScopeSaveState} />
               {futureScopeDirty && futureScopeSaveState === 'idle' && <span className="text-xs text-amber-600">Unsaved changes</span>}

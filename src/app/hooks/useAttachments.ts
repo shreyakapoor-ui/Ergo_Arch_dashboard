@@ -35,7 +35,16 @@ export interface Attachment {
   created_at: string;
 }
 
-export type AttachmentField = "weekly_update" | "comment";
+export type AttachmentField =
+  | "weekly_update"
+  | "comment"
+  | "description"
+  | "inputs"
+  | "outputs"
+  | "remaining_mvp_scope"
+  | "blockers"
+  | "future_scope";
+
 
 interface UseAttachmentsOptions {
   contextType: "node";
