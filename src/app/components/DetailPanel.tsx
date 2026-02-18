@@ -19,6 +19,8 @@ interface DetailPanelProps {
   tags: Tag[];
   /** Signed-in Google user — needed to attribute mentions. */
   googleUser?: User | null;
+  /** The current user's role — controls Delete Node visibility. */
+  userRole?: "admin" | "member" | null;
   allTags: Tag[];
   onClose: () => void;
   onUpdateNode: (nodeId: string, updates: Partial<ComponentNode>) => void;
@@ -192,7 +194,7 @@ function migrateWeeklyUpdates(node: ComponentNode): WeeklyUpdate[] {
 }
 
 // ─── Main Component ─────────────────────────────────────────────────
-export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd, width = 500, onResizeStart, isResizing = false, googleUser = null }: DetailPanelProps) {
+export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDeleteNode, onCreateTag, onEditStart, onEditEnd, width = 500, onResizeStart, isResizing = false, googleUser = null, userRole = null }: DetailPanelProps) {
   // ── Shared state ──
   const [newTagLabel, setNewTagLabel] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
@@ -1012,12 +1014,14 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
         )}
       </div>
 
-      {/* ── STICKY FOOTER ── */}
-      <div className="flex-shrink-0 bg-white border-t px-5 py-3">
-        <Button variant="destructive" className="w-full h-8 text-xs" onClick={() => onDeleteNode(node.id)}>
-          <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete Node
-        </Button>
-      </div>
+      {/* ── STICKY FOOTER — Delete Node (admin only) ── */}
+      {userRole === "admin" && (
+        <div className="flex-shrink-0 bg-white border-t px-5 py-3">
+          <Button variant="destructive" className="w-full h-8 text-xs" onClick={() => onDeleteNode(node.id)}>
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete Node
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

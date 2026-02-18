@@ -11,10 +11,11 @@ import { ArchitectureControls } from "./components/ArchitectureControls";
 import { DiagramViewer } from "./components/DiagramViewer";
 import { RoadmapViewer } from "./components/RoadmapViewer";
 import { Button } from "./components/ui/button";
-import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, LogOut } from "lucide-react";
+import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, LogOut, Users } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
 import { AddNodeDialog } from "./components/AddNodeDialog";
 import { UnlockScreen } from "./components/UnlockScreen";
+import { UserManagementPanel } from "./components/UserManagementPanel";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./auth/useAuth";
 
@@ -103,10 +104,14 @@ export default function App() {
     oauthError,
     signInWithGoogle,
     logout,
+    userRole,
+    accessDenied,
   } = useAuth();
 
   // Convenience alias used throughout the rest of the file (replaces old isAuthenticated)
   const isAuthenticated = fullyAuthed;
+
+  const [showUserManagement, setShowUserManagement] = useState(false);
 
   const [data, setData] = useState<ArchitectureData>(loadLocalData);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -644,50 +649,50 @@ export default function App() {
     });
   }, [patchSaveNode]);
 
-  const handleDeleteNode = useCallback((nodeId: string) => {
+  const handleDeleteNode = useCallback(async (nodeId: string) => {
     if (
-      window.confirm(
+      !window.confirm(
         "Are you sure you want to delete this node? This action cannot be undone."
       )
-    ) {
-      setData((prev) => {
-        const updated = {
-          ...prev,
-          components: prev.components.filter((comp) => comp.id !== nodeId),
-        };
-        // Persist deletion: fetch remote, remove the node, write back
-        (async () => {
-          try {
-            setSaveStatus("saving");
-            const { data: row, error: fetchErr } = await supabase
-              .from("architecture_data")
-              .select("data, connections, updated_at")
-              .eq("id", "main")
-              .single();
-            if (fetchErr) { console.error("delete fetch failed:", fetchErr); return; }
-            const remote = parseDates(row.data as ArchitectureData);
-            const saveTimestamp = new Date().toISOString();
-            lastSaveTimestampRef.current = saveTimestamp;
-            const { error } = await supabase
-              .from("architecture_data")
-              .upsert({
-                id: "main",
-                data: { ...remote, components: remote.components.filter(c => c.id !== nodeId) },
-                connections: row.connections,
-                updated_at: saveTimestamp,
-              });
-            setSaveStatus(error ? "offline" : "synced");
-            dbg("delete node", nodeId, "error=", error);
-          } catch (e) {
-            console.error("delete node save threw:", e);
-            setSaveStatus("offline");
-          }
-          setTimeout(() => setSaveStatus(""), 2000);
-        })();
-        return updated;
+    ) return;
+
+    // Optimistic UI update
+    setData((prev) => ({
+      ...prev,
+      components: prev.components.filter((comp) => comp.id !== nodeId),
+    }));
+    setSelectedNodeId(null);
+
+    // Server-side deletion via admin-only Edge Function
+    try {
+      setSaveStatus("saving");
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setSaveStatus("offline"); return; }
+
+      const SUPABASE_URL = "https://ywnvnwsziqjhauyqgzjt.supabase.co";
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-node`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ nodeId }),
       });
-      setSelectedNodeId(null);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("delete-node edge fn error:", err);
+        setSaveStatus("offline");
+      } else {
+        setSaveStatus("synced");
+        dbg("delete-node edge fn success for", nodeId);
+      }
+    } catch (e) {
+      console.error("delete-node fetch threw:", e);
+      setSaveStatus("offline");
     }
+    setTimeout(() => setSaveStatus(""), 2000);
   }, []);
 
   const handleCreateTag = useCallback((label: string, color: string) => {
@@ -805,7 +810,7 @@ export default function App() {
   // While Supabase resolves the existing OAuth session, show nothing (avoids flash)
   if (authLoading) return null;
 
-  // Show sign-in screen until Google OAuth session exists
+  // Show sign-in screen until Google OAuth session exists (or if domain/access denied)
   if (!fullyAuthed) {
     return (
       <UnlockScreen
@@ -813,6 +818,7 @@ export default function App() {
         oauthLoading={oauthLoading}
         oauthError={oauthError}
         signInWithGoogle={signInWithGoogle}
+        accessDenied={accessDenied}
         onEnter={() => {
           // Auto-handled by UnlockScreen useEffect; no extra state needed.
         }}
@@ -889,12 +895,23 @@ export default function App() {
           Add Arrow
         </Button>
 
-        {/* ── Logout ── */}
-        <div className="border-t border-gray-200 pt-2 mt-1">
+        {/* ── Manage Users (admin only) + Logout ── */}
+        <div className="border-t border-gray-200 pt-2 mt-1 space-y-1">
           {googleUser && (
             <p className="text-[10px] text-gray-400 text-center mb-1 truncate px-1 max-w-[160px]">
               {googleUser.user_metadata?.full_name ?? googleUser.email}
             </p>
+          )}
+          {userRole === "admin" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowUserManagement(true)}
+              className="w-full text-gray-500 hover:text-blue-600 hover:bg-blue-50 gap-2"
+            >
+              <Users className="h-4 w-4" />
+              Manage Users
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -1069,6 +1086,7 @@ export default function App() {
         onResizeStart={handleResizeStart}
         isResizing={isResizing}
         googleUser={googleUser}
+        userRole={userRole}
       />
 
       <DiagramViewer
@@ -1100,6 +1118,11 @@ export default function App() {
         }}
         existingTags={data.tags}
       />
+
+      {/* User Management Panel — admin only */}
+      {showUserManagement && userRole === "admin" && (
+        <UserManagementPanel onClose={() => setShowUserManagement(false)} />
+      )}
     </div>
   );
 }

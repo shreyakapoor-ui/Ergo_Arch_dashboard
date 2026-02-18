@@ -3,10 +3,13 @@
 //
 // Shown whenever the user is not signed in (no valid Supabase session), or
 // after the inactivity timer fires and clears the session.
+//
+// When `accessDenied` is true the sign-in button is replaced by a red
+// "Access Restricted" card explaining that the account is not authorised.
 // =============================================================================
 
 import { useEffect } from "react";
-import { LogIn, Loader2 } from "lucide-react";
+import { LogIn, Loader2, ShieldX } from "lucide-react";
 import { Button } from "./ui/button";
 import type { AuthActions, AuthState } from "../auth/useAuth";
 import { INACTIVITY_TIMEOUT_MS } from "../auth/authConstants";
@@ -18,6 +21,7 @@ interface UnlockScreenProps
     | "oauthLoading"
     | "oauthError"
     | "signInWithGoogle"
+    | "accessDenied"
   > {
   /** Called once the Google session is confirmed — enters the app. */
   onEnter: () => void;
@@ -30,12 +34,13 @@ export function UnlockScreen({
   oauthLoading,
   oauthError,
   signInWithGoogle,
+  accessDenied,
   onEnter,
 }: UnlockScreenProps) {
   // Auto-enter the app as soon as the OAuth redirect lands and googleUser is set
   useEffect(() => {
-    if (googleUser) onEnter();
-  }, [googleUser, onEnter]);
+    if (googleUser && !accessDenied) onEnter();
+  }, [googleUser, accessDenied, onEnter]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -43,16 +48,62 @@ export function UnlockScreen({
 
         {/* Header */}
         <div className="text-center">
-          <div className="mx-auto w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4">
-            <LogIn className="h-6 w-6 text-blue-600" />
+          <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4 ${accessDenied ? "bg-red-100" : "bg-blue-100"}`}>
+            {accessDenied
+              ? <ShieldX className="h-6 w-6 text-red-600" />
+              : <LogIn className="h-6 w-6 text-blue-600" />
+            }
           </div>
           <h1 className="text-2xl font-semibold text-gray-900">Ergo Architecture</h1>
-          <p className="text-gray-500 text-sm mt-1">Sign in to access the dashboard</p>
+          <p className="text-gray-500 text-sm mt-1">
+            {accessDenied ? "Access restricted" : "Sign in to access the dashboard"}
+          </p>
         </div>
 
-        {/* Sign-in area */}
-        {googleUser ? (
-          /* Already signed in (rare: flash before useEffect fires) */
+        {/* Body */}
+        {accessDenied ? (
+          /* ── Access Restricted ── */
+          <div className="space-y-4">
+            <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-center space-y-1">
+              <p className="text-sm font-medium text-red-800">
+                Your account is not authorised to access this dashboard.
+              </p>
+              <p className="text-xs text-red-600">
+                Only <span className="font-semibold">@bluelabellabs.com</span>,{" "}
+                <span className="font-semibold">@ergo.net</span>, and{" "}
+                <span className="font-semibold">@beyonddataconsulting.io</span>{" "}
+                accounts are permitted.
+              </p>
+              <p className="text-xs text-red-500 mt-2">
+                Contact{" "}
+                <a
+                  href="mailto:shreya.kapoor@bluelabellabs.com"
+                  className="underline hover:text-red-700"
+                >
+                  shreya.kapoor@bluelabellabs.com
+                </a>{" "}
+                to request access.
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="w-full gap-3"
+              onClick={signInWithGoogle}
+              disabled={oauthLoading}
+            >
+              {oauthLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <GoogleIcon />
+              )}
+              {oauthLoading ? "Redirecting to Google…" : "Sign in with a different account"}
+            </Button>
+          </div>
+        ) : googleUser ? (
+          /* ── Already signed in (rare flash before useEffect fires) ── */
           <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
             {googleUser.user_metadata?.avatar_url ? (
               <img
@@ -73,6 +124,7 @@ export function UnlockScreen({
             </div>
           </div>
         ) : (
+          /* ── Sign-in button ── */
           <Button
             type="button"
             variant="outline"
@@ -95,9 +147,11 @@ export function UnlockScreen({
         )}
 
         {/* Footer */}
-        <p className="text-xs text-gray-400 text-center">
-          Sessions expire after {TIMEOUT_MINUTES} min of inactivity.
-        </p>
+        {!accessDenied && (
+          <p className="text-xs text-gray-400 text-center">
+            Sessions expire after {TIMEOUT_MINUTES} min of inactivity.
+          </p>
+        )}
       </div>
     </div>
   );
