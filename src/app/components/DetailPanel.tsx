@@ -10,6 +10,7 @@ import { format } from 'date-fns';
 import type { User } from '@supabase/supabase-js';
 import { MentionTextarea, type MentionedUser } from './MentionTextarea';
 import { useMentions } from '../hooks/useMentions';
+import { AttachmentList } from './AttachmentList';
 
 type PanelTab = 'mvp' | 'future' | 'discussion';
 
@@ -69,6 +70,53 @@ function CollapsibleSection({
   );
 }
 
+// ─── URL Detection ───────────────────────────────────────────────────
+// Matches http(s):// URLs and bare www. URLs.
+const URL_REGEX = /((https?:\/\/|www\.)[^\s<>"')\]]+)/g;
+
+/** Splits a plain-text segment into text nodes and <a> link nodes. */
+function renderWithLinks(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  URL_REGEX.lastIndex = 0; // reset stateful regex
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    const [fullMatch] = match;
+    const start = match.index;
+
+    // Text before this URL
+    if (start > lastIndex) {
+      parts.push(text.slice(lastIndex, start));
+    }
+
+    // Normalise: prepend https:// to bare www. links
+    const href = fullMatch.startsWith('http') ? fullMatch : `https://${fullMatch}`;
+
+    parts.push(
+      <a
+        key={start}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 underline hover:text-blue-800 break-all"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {fullMatch}
+      </a>
+    );
+
+    lastIndex = start + fullMatch.length;
+  }
+
+  // Remaining text after last URL
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
+
 // ─── Formatted Text Renderer ────────────────────────────────────────
 function FormattedText({ text, className = '' }: { text: string; className?: string }) {
   if (!text) return null;
@@ -83,7 +131,7 @@ function FormattedText({ text, className = '' }: { text: string; className?: str
           return (
             <div key={i} className="flex gap-1.5 ml-1">
               <span className="text-gray-400 text-xs mt-0.5">•</span>
-              <span className="text-gray-700">{trimmedLine.replace(/^[-*•]\s*/, '')}</span>
+              <span className="text-gray-700">{renderWithLinks(trimmedLine.replace(/^[-*•]\s*/, ''))}</span>
             </div>
           );
         }
@@ -92,11 +140,11 @@ function FormattedText({ text, className = '' }: { text: string; className?: str
           return (
             <div key={i} className="flex gap-1.5 ml-1">
               <span className="text-gray-400 min-w-[1.2rem] text-xs mt-0.5">{numberedMatch[1]}.</span>
-              <span className="text-gray-700">{numberedMatch[2]}</span>
+              <span className="text-gray-700">{renderWithLinks(numberedMatch[2])}</span>
             </div>
           );
         }
-        return <p key={i} className="text-gray-700">{line}</p>;
+        return <p key={i} className="text-gray-700">{renderWithLinks(line)}</p>;
       })}
     </div>
   );
@@ -747,6 +795,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                             className="min-h-[80px]"
                             autoFocus
                           />
+                          {/* Attachments for this weekly update entry */}
+                          <AttachmentList
+                            contextType="node"
+                            contextId={entry.id}
+                            field="weekly_update"
+                            currentUser={googleUser}
+                          />
                           <div className="flex gap-2">
                             <Button size="sm" onClick={() => handleSaveWeeklyUpdate(entry.id)} className="h-7 text-xs">
                               <Check className="h-3 w-3 mr-1" /> Save
@@ -768,6 +823,14 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                             </div>
                           </div>
                           {entry.text ? <FormattedText text={entry.text} className="text-gray-600" /> : <p className="text-xs text-gray-400 italic">Empty entry</p>}
+                          {/* Read-only attachment list in display mode */}
+                          <AttachmentList
+                            contextType="node"
+                            contextId={entry.id}
+                            field="weekly_update"
+                            currentUser={googleUser}
+                            readOnly
+                          />
                         </div>
                       )}
                     </div>
@@ -897,6 +960,14 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                       ))}
                     </div>
                   )}
+                  {/* Attachments for this comment (read-only in display mode) */}
+                  <AttachmentList
+                    contextType="node"
+                    contextId={comment.id}
+                    field="comment"
+                    currentUser={googleUser}
+                    readOnly
+                  />
                 </div>
               ))}
             </div>
@@ -910,6 +981,13 @@ export function DetailPanel({ node, tags, allTags, onClose, onUpdateNode, onDele
                 placeholder="Add a comment or question… type @ to mention someone"
                 rows={3}
                 className="min-h-[70px]"
+              />
+              {/* Pending comment attachments — keyed by a draft ID so they can be linked after the comment is saved */}
+              <AttachmentList
+                contextType="node"
+                contextId={`draft-comment-${node.id}`}
+                field="comment"
+                currentUser={googleUser}
               />
               <Button size="sm" onClick={handleAddComment} className="w-full h-8 text-xs">
                 <Send className="h-3 w-3 mr-1" /> Add Comment
