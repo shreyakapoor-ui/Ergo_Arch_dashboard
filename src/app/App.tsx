@@ -20,6 +20,13 @@ import { createClient } from "@supabase/supabase-js";
 // ===========================================
 // SUPABASE CONFIGURATION (Real-time sync)
 // ===========================================
+
+// DEBUG flag: set to true (or add ?debug=1 to URL) to get verbose save/sync logs
+const DEBUG_SAVE = typeof window !== "undefined"
+  ? window.location.search.includes("debug=1")
+  : false;
+const dbg = (...args: unknown[]) => { if (DEBUG_SAVE) console.log("[SAVE-DEBUG]", ...args); };
+
 const SUPABASE_URL = "https://ywnvnwsziqjhauyqgzjt.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3bnZud3N6aXFqaGF1eXFnemp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyNjUxODQsImV4cCI6MjA4NTg0MTE4NH0.VqANIUQSYsyAwTSZUIq7K_xFdd00iG0wiIT8U8bV_9o";
 
@@ -120,9 +127,9 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
-  const editingNodeIdRef = useRef<string | null>(null); // Track which node is being edited (for selective merge)
+  const dirtyNodeIdsRef = useRef<Set<string>>(new Set()); // Track which nodes are being edited (for selective merge)
   const lastSaveTimestampRef = useRef<string | null>(null); // Track our last save to dedupe echoes
-  const pendingSaveResolvers = useRef<Array<{ resolve: () => void; reject: (e: Error) => void }>>([]); // Track pending save promises
+  const savePendingRef = useRef(false); // True while a debounced save is in-flight
 
   // ===== Resizable Detail Panel state =====
   const PANEL_MIN_WIDTH = 320;
@@ -169,6 +176,34 @@ export default function App() {
     };
   }, [isResizing]);
 
+  // Echo dedup helper: tolerates small timestamp differences from server normalization
+  const isOwnEcho = useCallback((incomingTimestamp: string) => {
+    if (!lastSaveTimestampRef.current) return false;
+    const diff = Math.abs(
+      new Date(incomingTimestamp).getTime() -
+      new Date(lastSaveTimestampRef.current).getTime()
+    );
+    return diff < 100; // 100ms tolerance
+  }, []);
+
+  // Write localStorage immediately on every data change (not debounced) — protects against tab close
+  useEffect(() => {
+    if (isInitialLoad.current) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
+  }, [data, connections]);
+
+  // Warn user on tab close if there are unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirtyNodeIdsRef.current.size > 0 || saveTimeoutRef.current) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
   // Load from Supabase on startup + subscribe to real-time updates
   useEffect(() => {
     // Skip if not authenticated
@@ -192,11 +227,20 @@ export default function App() {
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
-          // Dedupe: skip if this is our own echo (we just saved this)
-          if (row.updated_at === lastSaveTimestampRef.current) {
-            console.log("Skipping poll - this is our own echo");
+          // Skip if a local save is pending — don't overwrite optimistic state
+          if (isPolling && savePendingRef.current) {
             return;
           }
+
+          // Dedupe: skip if this is our own echo (we just saved this)
+          if (isOwnEcho(row.updated_at)) {
+            console.log("Skipping poll - this is our own echo");
+            dbg("POLL skipped (own echo). row.updated_at=", row.updated_at, "lastSave=", lastSaveTimestampRef.current);
+            return;
+          }
+          dbg("Poll applying remote data. updated_at=", row.updated_at,
+              "| savePending=", savePendingRef.current,
+              "| dirtyNodes=", [...dirtyNodeIdsRef.current]);
 
           // Only update if data has changed (for polling)
           if (isPolling && row.updated_at === lastUpdatedAt) {
@@ -205,25 +249,24 @@ export default function App() {
 
           lastUpdatedAt = row.updated_at;
 
-          // Row-level merge: preserve the node being edited locally
+          // Row-level merge: preserve all dirty (being-edited) nodes locally
           const incomingData = parseDates(row.data as ArchitectureData);
-          const editingId = editingNodeIdRef.current;
+          const dirtyIds = dirtyNodeIdsRef.current;
 
-          if (editingId) {
-            // Merge: keep our local version of the editing node, take remote for everything else
+          if (dirtyIds.size > 0) {
+            // Merge: keep our local version of dirty nodes, take remote for everything else
             setData(prev => ({
               ...incomingData,
               components: incomingData.components.map(incoming => {
-                if (incoming.id === editingId) {
-                  // Keep our local version of this node
-                  const local = prev.components.find(c => c.id === editingId);
+                if (dirtyIds.has(incoming.id)) {
+                  const local = prev.components.find(c => c.id === incoming.id);
                   return local || incoming;
                 }
                 return incoming;
               }),
             }));
           } else {
-            // No active edit - safe to replace everything
+            // No active edits - safe to replace everything
             setData(incomingData);
           }
 
@@ -273,29 +316,44 @@ export default function App() {
           if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
             const newRow = payload.new as { data: ArchitectureData; connections: Connection[]; updated_at: string };
 
-            // Dedupe: skip if this is our own echo
-            if (newRow.updated_at === lastSaveTimestampRef.current) {
-              console.log("Skipping realtime - this is our own echo");
+            dbg("Realtime event received. updated_at=", newRow.updated_at,
+                "| savePending=", savePendingRef.current,
+                "| dirtyNodes=", [...dirtyNodeIdsRef.current]);
+
+            // Skip if a local save is pending — don't overwrite optimistic state
+            if (savePendingRef.current) {
+              console.log("Skipping realtime — save pending");
+              dbg("SKIPPED realtime (save pending)");
               return;
             }
 
-            const incomingData = parseDates(newRow.data);
-            const editingId = editingNodeIdRef.current;
+            // Dedupe: skip if this is our own echo
+            if (isOwnEcho(newRow.updated_at)) {
+              console.log("Skipping realtime - this is our own echo");
+              dbg("SKIPPED realtime (own echo). lastSave=", lastSaveTimestampRef.current);
+              return;
+            }
 
-            if (editingId) {
-              // Row-level merge: keep our local version of the editing node
+            dbg("Applying realtime update from another client. dirty=", [...dirtyNodeIdsRef.current]);
+
+            const incomingData = parseDates(newRow.data);
+            const dirtyIds = dirtyNodeIdsRef.current;
+
+            if (dirtyIds.size > 0) {
+              // Row-level merge: keep our local version of all dirty nodes
+              dbg("Merging — preserving dirty nodes:", [...dirtyIds]);
               setData(prev => ({
                 ...incomingData,
                 components: incomingData.components.map(incoming => {
-                  if (incoming.id === editingId) {
-                    const local = prev.components.find(c => c.id === editingId);
+                  if (dirtyIds.has(incoming.id)) {
+                    const local = prev.components.find(c => c.id === incoming.id);
                     return local || incoming;
                   }
                   return incoming;
                 }),
               }));
             } else {
-              // No active edit - safe to replace everything
+              // No active edits - safe to replace everything
               setData(incomingData);
             }
 
@@ -327,7 +385,7 @@ export default function App() {
     };
   }, [isAuthenticated]);
 
-  // Auto-save to Supabase when data changes (debounced)
+  // Auto-save to Supabase when data changes (debounced, with retry)
   useEffect(() => {
     if (!isAuthenticated || isLoading || isInitialLoad.current) return;
 
@@ -337,47 +395,51 @@ export default function App() {
     }
 
     setSaveStatus("saving");
+    savePendingRef.current = true;
+    dbg("Save triggered — queueing debounce (800 ms). dirty nodes:", [...dirtyNodeIdsRef.current]);
 
     // Debounce saves to avoid too many requests
     saveTimeoutRef.current = setTimeout(async () => {
-      // Save to localStorage as backup
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
-
       // Generate timestamp for echo deduplication
       const saveTimestamp = new Date().toISOString();
       lastSaveTimestampRef.current = saveTimestamp;
 
-      // Save to Supabase
-      try {
-        const { error } = await supabase
-          .from("architecture_data")
-          .upsert({
-            id: "main",
-            data: data,
-            connections: connections,
-            updated_at: saveTimestamp,
-          });
+      const payload = {
+        id: "main" as const,
+        data: data,
+        connections: connections,
+        updated_at: saveTimestamp,
+      };
 
-        if (error) {
-          console.error("Supabase save error:", error);
-          setSaveStatus("offline");
-          // Reject all pending save promises
-          pendingSaveResolvers.current.forEach(({ reject }) => reject(new Error("Save failed")));
-          pendingSaveResolvers.current = [];
-        } else {
-          setSaveStatus("synced");
-          // Resolve all pending save promises
-          pendingSaveResolvers.current.forEach(({ resolve }) => resolve());
-          pendingSaveResolvers.current = [];
+      dbg("Attempting upsert at", saveTimestamp, "| components:", data.components.length);
+
+      // Retry with exponential backoff (1s, 2s, 4s)
+      let success = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const { error } = await supabase
+            .from("architecture_data")
+            .upsert(payload);
+
+          if (!error) {
+            success = true;
+            dbg("Upsert succeeded on attempt", attempt + 1);
+            break;
+          }
+          console.error(`Supabase save attempt ${attempt + 1} failed:`, error);
+          dbg("Upsert failed attempt", attempt + 1, error);
+        } catch (e) {
+          console.error(`Save attempt ${attempt + 1} threw:`, e);
+          dbg("Upsert threw attempt", attempt + 1, e);
         }
-      } catch (e) {
-        console.error("Failed to save to Supabase:", e);
-        setSaveStatus("offline");
-        // Reject all pending save promises
-        pendingSaveResolvers.current.forEach(({ reject }) => reject(e as Error));
-        pendingSaveResolvers.current = [];
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        }
       }
+
+      savePendingRef.current = false;
+      setSaveStatus(success ? "synced" : "offline");
+      dbg("Save complete. success=", success, "| timestamp=", saveTimestamp);
       setTimeout(() => setSaveStatus(""), 2000);
     }, 800);
 
@@ -462,22 +524,16 @@ export default function App() {
     return components;
   }, [data.components, activeFilterTags, activeMilestone, data.milestones]);
 
-  // Returns a promise that resolves when the save completes
-  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      // Track this promise to resolve when save completes
-      pendingSaveResolvers.current.push({ resolve, reject });
-
-      // Optimistically update local state immediately
-      setData((prev) => ({
-        ...prev,
-        components: prev.components.map((comp) =>
-          comp.id === nodeId
-            ? { ...comp, ...updates, lastUpdated: new Date() }
-            : comp
-        ),
-      }));
-    });
+  // Optimistically update local state — Supabase save is handled by the auto-save effect
+  const handleUpdateNode = (nodeId: string, updates: Partial<ComponentNode>): void => {
+    setData((prev) => ({
+      ...prev,
+      components: prev.components.map((comp) =>
+        comp.id === nodeId
+          ? { ...comp, ...updates, lastUpdated: new Date() }
+          : comp
+      ),
+    }));
   };
 
   const handleDeleteNode = (nodeId: string) => {
@@ -570,6 +626,31 @@ export default function App() {
       onMouseMove={handleDrag}
       onMouseUp={handleDragEnd}
     >
+      {/* ===== MAINTENANCE BANNER — top of every page, cannot be missed ===== */}
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 9999,
+          backgroundColor: "#b45309",   /* amber-700 */
+          color: "#ffffff",
+          padding: "10px 20px",
+          textAlign: "center",
+          fontWeight: 700,
+          fontSize: "14px",
+          letterSpacing: "0.01em",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+          borderBottom: "2px solid #92400e",
+        }}
+      >
+        ⚠️ Active app development in progress. Please close the app for the next 2 hours and reopen later.
+      </div>
+      {/* Spacer so content is not hidden behind the fixed banner */}
+      <div style={{ height: "40px" }} />
+      {/* ===== END MAINTENANCE BANNER ===== */}
+
       <ArchitectureControls
         allTags={data.tags}
         milestones={data.milestones}
@@ -789,8 +870,8 @@ export default function App() {
         onUpdateNode={handleUpdateNode}
         onDeleteNode={handleDeleteNode}
         onCreateTag={handleCreateTag}
-        onEditStart={(nodeId) => { editingNodeIdRef.current = nodeId; }}
-        onEditEnd={() => { editingNodeIdRef.current = null; }}
+        onEditStart={(nodeId) => { dirtyNodeIdsRef.current.add(nodeId); }}
+        onEditEnd={(nodeId) => { if (nodeId) dirtyNodeIdsRef.current.delete(nodeId); }}
         width={panelWidth}
         onResizeStart={handleResizeStart}
         isResizing={isResizing}
