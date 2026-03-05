@@ -1,7 +1,7 @@
 import { Tag, MilestoneView } from '../types/architecture';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Milestone, X, FileImage, Map, ExternalLink } from 'lucide-react';
+import { Milestone, X, FileImage, Map, ExternalLink, BarChart2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 interface ArchitectureControlsProps {
@@ -11,6 +11,7 @@ interface ArchitectureControlsProps {
   activeMilestone: string | null;
   onShowDiagram: () => void;
   onShowRoadmap: () => void;
+  onShowTimeline: () => void;
 }
 
 export function ArchitectureControls({
@@ -20,6 +21,7 @@ export function ArchitectureControls({
   activeMilestone,
   onShowDiagram,
   onShowRoadmap,
+  onShowTimeline,
 }: ArchitectureControlsProps) {
   const activeMilestoneObj = milestones.find((m) => m.id === activeMilestone);
 
@@ -77,6 +79,15 @@ export function ArchitectureControls({
               className="bg-purple-50 border-purple-300 hover:bg-purple-100"
             >
               <Map className="h-4 w-4 mr-2" /> Roadmap
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onShowTimeline}
+              className="bg-slate-50 border-slate-300 hover:bg-slate-100"
+            >
+              <BarChart2 className="h-4 w-4 mr-2" /> Executive Timeline
             </Button>
 
             <Select

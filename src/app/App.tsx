@@ -10,6 +10,7 @@ import { DetailPanel } from "./components/DetailPanel";
 import { ArchitectureControls } from "./components/ArchitectureControls";
 import { DiagramViewer } from "./components/DiagramViewer";
 import { RoadmapViewer } from "./components/RoadmapViewer";
+import { ExecutiveTimeline } from "./components/ExecutiveTimeline";
 import { Button } from "./components/ui/button";
 import { Link, Plus, Download, Upload, PlusCircle, RefreshCw, LogOut, Users } from "lucide-react";
 import { AddArrowDialog } from "./components/AddArrowDialog";
@@ -119,6 +120,7 @@ export default function App() {
   const [activeMilestone, setActiveMilestone] = useState<string | null>(null);
   const [showDiagram, setShowDiagram] = useState(false);
   const [showRoadmap, setShowRoadmap] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [connections, setConnections] = useState<Connection[]>(loadLocalConnections);
   const [connectionMode, setConnectionMode] = useState(false);
   const [connectionStart, setConnectionStart] = useState<string | null>(null);
@@ -849,6 +851,7 @@ export default function App() {
         activeMilestone={activeMilestone}
         onShowDiagram={() => setShowDiagram(true)}
         onShowRoadmap={() => setShowRoadmap(true)}
+        onShowTimeline={() => setShowTimeline(true)}
       />
 
       {/* Connection Mode Banner */}
@@ -1107,6 +1110,11 @@ export default function App() {
       <RoadmapViewer
         isOpen={showRoadmap}
         onClose={() => setShowRoadmap(false)}
+      />
+
+      <ExecutiveTimeline
+        isOpen={showTimeline}
+        onClose={() => setShowTimeline(false)}
       />
 
       <AddArrowDialog
