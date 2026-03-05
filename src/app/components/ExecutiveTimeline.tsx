@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Printer, Calendar, TrendingUp, TrendingDown, Minus,
-  ChevronRight, Pencil, Plus, Trash2, ChevronDown,
+  ChevronRight, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
   Flag, AlertTriangle, GitBranch, Link2, Shuffle, Globe, Ban,
   ArrowRight, Loader2,
 } from 'lucide-react';
@@ -277,6 +277,120 @@ function EditableText({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Markdown renderer (bullets + bold only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderInline(s: string): React.ReactNode {
+  const parts = s.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) =>
+    p.startsWith('**') && p.endsWith('**')
+      ? <strong key={i}>{p.slice(2, -2)}</strong>
+      : p
+  );
+}
+
+function renderMarkdown(text: string): React.ReactNode {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+
+  function flushList() {
+    if (listItems.length) {
+      nodes.push(<ul key={`ul-${nodes.length}`} className="list-disc list-inside space-y-0.5">{listItems}</ul>);
+      listItems = [];
+    }
+  }
+
+  lines.forEach((line, i) => {
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet) {
+      listItems.push(<li key={i}>{renderInline(bullet[1])}</li>);
+    } else {
+      flushList();
+      if (line.trim()) nodes.push(<p key={i} className="leading-snug">{renderInline(line)}</p>);
+    }
+  });
+  flushList();
+  return <div className="space-y-1 text-sm text-gray-600">{nodes}</div>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MarkdownFocusCell — inline editable Focus field with bullets + bold toolbar
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MarkdownFocusCell({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [editing, setEditing]   = useState(false);
+  const [draft, setDraft]       = useState(value);
+  const textareaRef             = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { setDraft(value); }, [value]);
+
+  function commit() { setEditing(false); if (draft !== value) onChange(draft); }
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { e.stopPropagation(); setDraft(value); setEditing(false); }
+  }
+
+  function insertAtCursor(prefix: string, suffix = '') {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart, end = el.selectionEnd;
+    const sel   = draft.slice(start, end);
+    const next  = draft.slice(0, start) + prefix + sel + suffix + draft.slice(end);
+    setDraft(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + prefix.length, start + prefix.length + sel.length);
+    });
+  }
+
+  function insertBullet() {
+    const el = textareaRef.current;
+    if (!el) { setDraft(d => (d ? d + '\n- ' : '- ')); return; }
+    const pos    = el.selectionStart;
+    const before = draft.slice(0, pos);
+    const after  = draft.slice(pos);
+    const pfx    = before.length === 0 || before.endsWith('\n') ? '- ' : '\n- ';
+    const next   = before + pfx + after;
+    setDraft(next);
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(pos + pfx.length, pos + pfx.length); });
+  }
+
+  if (!editing) {
+    return (
+      <div onClick={() => setEditing(true)} className="cursor-text group rounded px-0.5 -mx-0.5 hover:bg-gray-50 transition-colors min-h-[1.5rem]">
+        {value
+          ? renderMarkdown(value)
+          : <span className="text-gray-300 italic text-xs">Click to add focus…</span>
+        }
+        <Pencil className="inline h-2.5 w-2.5 text-gray-300 opacity-0 group-hover:opacity-100 ml-1 transition-opacity" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1" onClick={e => e.stopPropagation()}>
+      <div className="flex gap-1">
+        <button type="button" onMouseDown={e => { e.preventDefault(); insertBullet(); }}
+          className="text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600 transition-colors">
+          • Bullet
+        </button>
+        <button type="button" onMouseDown={e => { e.preventDefault(); insertAtCursor('**', '**'); }}
+          className="text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 font-bold transition-colors">
+          B Bold
+        </button>
+      </div>
+      <textarea
+        ref={textareaRef} autoFocus value={draft} rows={4}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit} onKeyDown={onKeyDown}
+        className="w-full text-sm border border-blue-300 rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white"
+        placeholder="Use - for bullets, **text** for bold"
+      />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // StatusDropdown (phase rows)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -313,22 +427,32 @@ function StatusDropdown({ value, onChange }: { value: string; onChange: (v: stri
 // PhaseTagCounts — compact badge summary for the phase table Tags column
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PhaseTagCounts({ phaseId, tags, onClick }: { phaseId: string; tags: TimelineItem[]; onClick: () => void }) {
+function PhaseTagCounts({
+  phaseId, tags, onTagClick, onPhaseClick,
+}: {
+  phaseId: string;
+  tags: TimelineItem[];
+  onTagClick: (tag: TimelineItem) => void;
+  onPhaseClick: () => void;
+}) {
   const phaseTags = tags.filter(t => t.phase_id === phaseId);
   if (phaseTags.length === 0) return (
-    <span className="text-gray-300 text-xs cursor-pointer hover:text-gray-400 transition-colors" onClick={onClick}>—</span>
+    <span className="text-gray-300 text-xs cursor-pointer hover:text-gray-400 transition-colors" onClick={onPhaseClick}>—</span>
   );
-  const counts: Partial<Record<TagType, number>> = {};
-  for (const t of phaseTags) counts[t.type] = (counts[t.type] ?? 0) + 1;
+  const byType: Partial<Record<TagType, TimelineItem[]>> = {};
+  for (const t of phaseTags) { if (!byType[t.type]) byType[t.type] = []; byType[t.type]!.push(t); }
   return (
-    <div className="flex flex-wrap gap-1 cursor-pointer" onClick={onClick}>
-      {(Object.entries(counts) as [TagType, number][]).map(([type, count]) => {
-        const cfg = TAG_CONFIG[type];
+    <div className="flex flex-wrap gap-1">
+      {(Object.entries(byType) as [TagType, TimelineItem[]][]).map(([type, typeTags]) => {
+        const cfg  = TAG_CONFIG[type];
         const Icon = cfg.Icon;
         return (
-          <span key={type} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${cfg.bg} ${cfg.text}`}>
-            <Icon className="h-2.5 w-2.5" />{count}
-          </span>
+          <button key={type} type="button"
+            onClick={e => { e.stopPropagation(); onTagClick(typeTags[0]); }}
+            title={`${typeTags.length} ${cfg.label}${typeTags.length > 1 ? 's' : ''} – click to view`}
+            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${cfg.bg} ${cfg.text}`}>
+            <Icon className="h-2.5 w-2.5" />{typeTags.length}
+          </button>
         );
       })}
     </div>
@@ -605,6 +729,15 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     setBoard(prev => ({ ...prev, phases: [...prev.phases, { id: nextId(), phase: 'New phase', dates: '', focus: '', status: 'Not started' }] }));
   }
   function deletePhase(i: number) { setBoard(prev => ({ ...prev, phases: prev.phases.filter((_, idx) => idx !== i) })); }
+  function movePhase(i: number, dir: -1 | 1) {
+    const j = i + dir;
+    setBoard(prev => {
+      if (j < 0 || j >= prev.phases.length) return prev;
+      const phases = [...prev.phases];
+      [phases[i], phases[j]] = [phases[j], phases[i]];
+      return { ...prev, phases };
+    });
+  }
   function cycleConfidence() {
     const next = CONFIDENCE_CYCLE[(CONFIDENCE_CYCLE.indexOf(board.confidence) + 1) % CONFIDENCE_CYCLE.length];
     patch('confidence', next);
@@ -854,7 +987,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
         </div>
 
         {/* ── Scrollable body ────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto relative">
+        <div className="flex-1 overflow-y-auto">
 
           {/* ── Timeline section ──────────────────────────────────── */}
           <div className="px-8 pt-6 pb-2">
@@ -1038,19 +1171,36 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                             <EditableText value={row.dates} onChange={v => patchPhase(i, 'dates', v)} className="text-gray-500 text-sm" />
                           </td>
                           <td className="px-4 py-3 text-gray-600">
-                            <EditableText value={row.focus} onChange={v => patchPhase(i, 'focus', v)} className="text-gray-600 text-sm" multiline />
+                            <MarkdownFocusCell value={row.focus} onChange={v => patchPhase(i, 'focus', v)} />
                           </td>
                           <td className="px-4 py-3">
                             <StatusDropdown value={row.status} onChange={v => patchPhase(i, 'status', v)} />
                           </td>
                           <td className="px-4 py-3">
-                            <PhaseTagCounts phaseId={row.id} tags={tags} onClick={() => handlePhaseClick(i)} />
+                            <PhaseTagCounts
+                            phaseId={row.id}
+                            tags={tags}
+                            onTagClick={tag => setSelectedTag(tag)}
+                            onPhaseClick={() => handlePhaseClick(i)}
+                          />
                           </td>
                           <td className="pr-3 py-3">
-                            <button onClick={() => deletePhase(i)} title="Delete row"
-                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+                              <button onClick={() => movePhase(i, -1)} disabled={i === 0}
+                                title="Move up"
+                                className="p-1 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed">
+                                <ChevronUp className="h-3.5 w-3.5" />
+                              </button>
+                              <button onClick={() => movePhase(i, 1)} disabled={i === board.phases.length - 1}
+                                title="Move down"
+                                className="p-1 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed">
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              </button>
+                              <button onClick={() => deletePhase(i)} title="Delete row"
+                                className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1093,17 +1243,18 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
             </div>
           </div>
 
-          {/* Tag detail sub-panel (inside drawer) */}
-          {selectedTag && (
-            <TagDetailPanel
-              tag={selectedTag}
-              phases={board.phases}
-              onClose={() => setSelectedTag(null)}
-              onEdit={openEditForm}
-              onDelete={deleteTag}
-            />
-          )}
         </div>
+
+        {/* Tag detail sub-panel — absolute within the drawer, outside the scrollable body */}
+        {selectedTag && (
+          <TagDetailPanel
+            tag={selectedTag}
+            phases={board.phases}
+            onClose={() => setSelectedTag(null)}
+            onEdit={openEditForm}
+            onDelete={deleteTag}
+          />
+        )}
       </div>
 
       {/* Add/Edit tag form modal */}
