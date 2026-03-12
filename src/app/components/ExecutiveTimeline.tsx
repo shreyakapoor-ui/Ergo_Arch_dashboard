@@ -73,22 +73,65 @@ const PROGRAM_ID = 'ergo-q1';
 // Date helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TIMELINE_START = new Date('2026-01-01');
-const TIMELINE_END   = new Date('2026-04-15');
-const TODAY          = new Date('2026-03-05');
+// ─── Timeline geometry constants ─────────────────────────────────────────────
+// All fixed program dates use T12:00:00 (local noon) so they're consistent
+// with date strings produced by toDate(), which also appends T12:00:00.
+const TIMELINE_START = new Date('2026-01-01T12:00:00');
+const TIMELINE_END   = new Date('2026-04-15T12:00:00');
 const PX_PER_DAY     = 18;
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
 
 function daysBetween(a: Date, b: Date) {
   return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 }
 function xFor(date: Date) { return daysBetween(TIMELINE_START, date) * PX_PER_DAY; }
+/** Parse a YYYY-MM-DD string as local noon to avoid UTC-offset day-shift bugs. */
 function toDate(s: string): Date {
   return new Date(s.length === 10 ? s + 'T12:00:00' : s);
 }
 function fmtDate(s: string) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(toDate(s));
 }
-function todayISO() { return TODAY.toISOString().slice(0, 10); }
+
+// ─── Runtime current-date utility (America/Los_Angeles) ──────────────────────
+
+/**
+ * Returns today's date string (YYYY-MM-DD) in the America/Los_Angeles timezone.
+ * Uses Intl.DateTimeFormat so it's correct regardless of the host machine's
+ * local timezone.  Call once at startup and treat the result as immutable for
+ * the session lifetime.
+ */
+function getCurrentDatePT(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date()); // → "YYYY-MM-DD"
+}
+
+/**
+ * ISO date string (YYYY-MM-DD) for today in PT — resolved once at module load.
+ * Single source of truth for all "today" logic in this module.
+ */
+const TODAY_ISO = getCurrentDatePT();
+
+/** Today as a Date object (PT), resolved once at module load. */
+const TODAY = toDate(TODAY_ISO);
+
+/** Returns today's date string (YYYY-MM-DD, PT). Used as the default date in forms. */
+function todayISO() { return TODAY_ISO; }
+
+/**
+ * x-pixel position for "today", clamped to the visible timeline range.
+ * Used for scroll centering so the view doesn't scroll past the timeline edges
+ * when the current date is before the programme start or after its end.
+ */
+function todayX() {
+  const clamped =
+    TODAY < TIMELINE_START ? TIMELINE_START :
+    TODAY > TIMELINE_END   ? TIMELINE_END   : TODAY;
+  return xFor(clamped);
+}
 
 const TOTAL_WIDTH = daysBetween(TIMELINE_START, TIMELINE_END) * PX_PER_DAY;
 const TRACK_HEIGHT = 230; // extended to fit tag chip rows
@@ -97,29 +140,30 @@ const TRACK_HEIGHT = 230; // extended to fit tag chip rows
 // Static timeline geometry
 // ─────────────────────────────────────────────────────────────────────────────
 
+// isToday is computed from TODAY_ISO so it tracks the real current date.
 const MILESTONE_DATES = [
-  { date: new Date('2026-01-01'), isToday: false, isLaunch: false },
-  { date: new Date('2026-02-01'), isToday: false, isLaunch: false },
-  { date: new Date('2026-03-05'), isToday: true,  isLaunch: false },
-  { date: new Date('2026-03-18'), isToday: false, isLaunch: false },
-  { date: new Date('2026-03-31'), isToday: false, isLaunch: false },
-  { date: new Date('2026-04-01'), isToday: false, isLaunch: true  },
-];
+  { date: toDate('2026-01-01'), isLaunch: false },
+  { date: toDate('2026-02-01'), isLaunch: false },
+  { date: toDate('2026-03-05'), isLaunch: false },
+  { date: toDate('2026-03-18'), isLaunch: false },
+  { date: toDate('2026-03-31'), isLaunch: false },
+  { date: toDate('2026-04-01'), isLaunch: true  },
+].map(m => ({ ...m, isToday: m.date.toDateString() === TODAY.toDateString() }));
 
 const PHASE_BAR_DATES = [
-  { start: new Date('2026-01-01'), end: new Date('2026-03-05'), color: 'bg-blue-200'   },
-  { start: new Date('2026-03-05'), end: new Date('2026-03-18'), color: 'bg-amber-200'  },
-  { start: new Date('2026-03-05'), end: new Date('2026-03-18'), color: 'bg-purple-200' },
-  { start: new Date('2026-03-19'), end: new Date('2026-03-31'), color: 'bg-green-200'  },
+  { start: toDate('2026-01-01'), end: toDate('2026-03-05'), color: 'bg-blue-200'   },
+  { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-amber-200'  },
+  { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-purple-200' },
+  { start: toDate('2026-03-19'), end: toDate('2026-03-31'), color: 'bg-green-200'  },
 ];
 
 // Dates to scroll to when clicking phase rows (indices match board.phases)
 const PHASE_SCROLL_DATES = [
-  new Date('2026-01-01'),
-  new Date('2026-03-05'),
-  new Date('2026-03-05'),
-  new Date('2026-03-19'),
-  new Date('2026-04-01'),
+  toDate('2026-01-01'),
+  toDate('2026-03-05'),
+  toDate('2026-03-05'),
+  toDate('2026-03-19'),
+  toDate('2026-04-01'),
 ];
 
 // Y positions for each tag chip lane (below milestone labels)
@@ -884,18 +928,18 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     return () => document.removeEventListener('keydown', h);
   }, [isOpen, onClose, showAddForm, selectedTag]);
 
-  // Scroll to TODAY on open
+  // Scroll to TODAY on open (clamped so we never scroll past the timeline edges)
   useEffect(() => {
     if (!isOpen) return;
     requestAnimationFrame(() => {
       const el = timelineRef.current;
-      if (el) el.scrollLeft = xFor(TODAY) - el.clientWidth / 2;
+      if (el) el.scrollLeft = todayX() - el.clientWidth / 2;
     });
   }, [isOpen]);
 
   function scrollToToday() {
     const el = timelineRef.current;
-    if (el) el.scrollTo({ left: xFor(TODAY) - el.clientWidth / 2, behavior: 'smooth' });
+    if (el) el.scrollTo({ left: todayX() - el.clientWidth / 2, behavior: 'smooth' });
   }
 
   function handlePhaseClick(i: number) {
