@@ -77,7 +77,7 @@ const PROGRAM_ID = 'ergo-q1';
 // All fixed program dates use T12:00:00 (local noon) so they're consistent
 // with date strings produced by toDate(), which also appends T12:00:00.
 const TIMELINE_START = new Date('2026-01-01T12:00:00');
-const TIMELINE_END   = new Date('2026-04-15T12:00:00');
+const TIMELINE_END   = new Date('2026-05-31T12:00:00');
 const PX_PER_DAY     = 18;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -155,6 +155,7 @@ const PHASE_BAR_DATES = [
   { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-amber-200'  },
   { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-purple-200' },
   { start: toDate('2026-03-19'), end: toDate('2026-03-31'), color: 'bg-green-200'  },
+  { start: toDate('2026-04-02'), end: toDate('2026-05-31'), color: 'bg-violet-200' },
 ];
 
 // Dates to scroll to when clicking phase rows (indices match board.phases)
@@ -164,6 +165,7 @@ const PHASE_SCROLL_DATES = [
   toDate('2026-03-05'),
   toDate('2026-03-19'),
   toDate('2026-04-01'),
+  toDate('2026-04-02'),
 ];
 
 // Y positions for each tag chip lane (below milestone labels)
@@ -230,6 +232,7 @@ const DEFAULT_BOARD: BoardData = {
     { id: 'p3', phase: 'Design Sprint 1',         dates: 'Mar 5 – 18',   focus: 'User stories, wireframes, component library',         status: 'Kicking off today' },
     { id: 'p4', phase: 'Design Sprint 2 + Build', dates: 'Mar 19 – 31',  focus: 'Hi-fi design, UI build, backend integration, QA',    status: 'Starting Mar 19'   },
     { id: 'p5', phase: 'MVP Launch',              dates: 'Apr 1',        focus: 'Live with one client',                                status: 'Target'            },
+    { id: 'p6', phase: 'Beta',                    dates: 'Apr 2 – May 31', focus: 'User feedback, iteration, stability hardening',       status: 'Not started'       },
   ],
   notes: { accomplished: '', remaining: '', risks: '' },
   footer: 'We are 27 days from launch. The backend analysis engine is running. UI work starts today.',
@@ -1148,8 +1151,16 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                   </div>
 
                   {/* Q1 Target badge */}
-                  <div className="absolute" style={{ left: xFor(new Date('2026-04-01')), top: 18 }}>
+                  <div className="absolute" style={{ left: xFor(toDate('2026-04-01')), top: 18 }}>
                     <div className="-translate-x-1/2 inline-flex items-center bg-purple-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm">Q1 Target</div>
+                  </div>
+
+                  {/* Beta phase label — centered over the Beta bar */}
+                  <div className="absolute" style={{
+                    left: (xFor(toDate('2026-04-02')) + xFor(toDate('2026-05-31'))) / 2,
+                    top: 18,
+                  }}>
+                    <div className="-translate-x-1/2 inline-flex items-center bg-violet-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm">Beta</div>
                   </div>
 
                   {/* Tag chips */}
