@@ -3,8 +3,9 @@ import {
   X, Printer, Calendar, TrendingUp, TrendingDown, Minus,
   ChevronRight, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
   Flag, AlertTriangle, GitBranch, Link2, Shuffle, Globe, Ban,
-  ArrowRight, Loader2,
+  ArrowRight, Loader2, Download,
 } from 'lucide-react';
+import { generateTimelinePptx } from '../utils/generateTimelinePptx';
 import { Button } from './ui/button';
 import { supabase } from '../supabaseClient';
 
@@ -77,8 +78,8 @@ const PROGRAM_ID = 'ergo-q1';
 // All fixed program dates use T12:00:00 (local noon) so they're consistent
 // with date strings produced by toDate(), which also appends T12:00:00.
 const TIMELINE_START = new Date('2026-01-01T12:00:00');
-const TIMELINE_END   = new Date('2026-05-31T12:00:00');
-const PX_PER_DAY     = 18;
+const TIMELINE_END   = new Date('2026-12-31T12:00:00');
+const PX_PER_DAY     = 8;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -94,32 +95,37 @@ function fmtDate(s: string) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(toDate(s));
 }
 
-// ─── Runtime current-date utility (America/Los_Angeles) ──────────────────────
+// ─── Runtime current-date utility (America/New_York) ─────────────────────────
 
 /**
- * Returns today's date string (YYYY-MM-DD) in the America/Los_Angeles timezone.
+ * Returns today's date string (YYYY-MM-DD) in the America/New_York timezone.
  * Uses Intl.DateTimeFormat so it's correct regardless of the host machine's
  * local timezone.  Call once at startup and treat the result as immutable for
  * the session lifetime.
  */
-function getCurrentDatePT(): string {
+function getCurrentDateET(): string {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Los_Angeles',
+    timeZone: 'America/New_York',
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date()); // → "YYYY-MM-DD"
 }
 
 /**
- * ISO date string (YYYY-MM-DD) for today in PT — resolved once at module load.
+ * ISO date string (YYYY-MM-DD) for today in ET — resolved once at module load.
  * Single source of truth for all "today" logic in this module.
  */
-const TODAY_ISO = getCurrentDatePT();
+const TODAY_ISO = getCurrentDateET();
 
-/** Today as a Date object (PT), resolved once at module load. */
+/** Today as a Date object (ET), resolved once at module load. */
 const TODAY = toDate(TODAY_ISO);
 
-/** Returns today's date string (YYYY-MM-DD, PT). Used as the default date in forms. */
+/** Returns today's date string (YYYY-MM-DD, ET). Used as the default date in forms. */
 function todayISO() { return TODAY_ISO; }
+
+/** Formatted display string for today in ET, e.g. "Mar 13". */
+const TODAY_DISPLAY = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', month: 'short', day: 'numeric',
+}).format(new Date());
 
 /**
  * x-pixel position for "today", clamped to the visible timeline range.
@@ -134,42 +140,50 @@ function todayX() {
 }
 
 const TOTAL_WIDTH = daysBetween(TIMELINE_START, TIMELINE_END) * PX_PER_DAY;
-const TRACK_HEIGHT = 230; // extended to fit tag chip rows
+const TRACK_HEIGHT = 220;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static timeline geometry
 // ─────────────────────────────────────────────────────────────────────────────
 
-// isToday is computed from TODAY_ISO so it tracks the real current date.
-const MILESTONE_DATES = [
-  { date: toDate('2026-01-01'), isLaunch: false },
-  { date: toDate('2026-02-01'), isLaunch: false },
-  { date: toDate('2026-03-05'), isLaunch: false },
-  { date: toDate('2026-03-18'), isLaunch: false },
-  { date: toDate('2026-03-31'), isLaunch: false },
-  { date: toDate('2026-04-01'), isLaunch: true  },
-].map(m => ({ ...m, isToday: m.date.toDateString() === TODAY.toDateString() }));
-
-const PHASE_BAR_DATES = [
-  { start: toDate('2026-01-01'), end: toDate('2026-03-05'), color: 'bg-blue-200'   },
-  { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-amber-200'  },
-  { start: toDate('2026-03-05'), end: toDate('2026-03-18'), color: 'bg-purple-200' },
-  { start: toDate('2026-03-19'), end: toDate('2026-03-31'), color: 'bg-green-200'  },
-  { start: toDate('2026-04-02'), end: toDate('2026-05-31'), color: 'bg-violet-200' },
+// ─── Quarter segmentation bands ───────────────────────────────────────────────
+const QUARTERS = [
+  { label: 'Q1', start: toDate('2026-01-01'), end: toDate('2026-03-31'), bg: 'rgba(219,234,254,0.28)', labelColor: '#60a5fa' },
+  { label: 'Q2', start: toDate('2026-04-01'), end: toDate('2026-06-30'), bg: 'rgba(209,250,229,0.28)', labelColor: '#34d399' },
+  { label: 'Q3', start: toDate('2026-07-01'), end: toDate('2026-09-30'), bg: 'rgba(254,243,199,0.28)', labelColor: '#fbbf24' },
+  { label: 'Q4', start: toDate('2026-10-01'), end: toDate('2026-12-31'), bg: 'rgba(237,233,254,0.28)', labelColor: '#a78bfa' },
 ];
 
-// Dates to scroll to when clicking phase rows (indices match board.phases)
-const PHASE_SCROLL_DATES = [
-  toDate('2026-01-01'),
-  toDate('2026-03-05'),
-  toDate('2026-03-05'),
-  toDate('2026-03-19'),
-  toDate('2026-04-01'),
-  toDate('2026-04-02'),
+// Monthly tick marks across the full year
+const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_TICKS = Array.from({ length: 12 }, (_, m) => ({
+  date: new Date(2026, m, 1, 12, 0, 0),
+  label: MONTH_LABELS[m],
+}));
+
+// ─── Sprint data — source of truth for timeline bars and lower panel ──────────
+interface Sprint {
+  id: string; phase: string; dates: string;
+  startDate: Date; endDate: Date;
+  barColor: string;   // Tailwind bg class
+  barRow: 0 | 1;     // which row to render in (0=top, 1=bottom)
+  focus: string; status: string;
+}
+
+const SPRINTS: Sprint[] = [
+  { id: 'p1', phase: 'Backend Pipeline',        dates: 'Jan – Mar 5',     startDate: toDate('2026-01-01'), endDate: toDate('2026-03-05'), barColor: 'bg-blue-300',   barRow: 0, focus: 'Analysis engine, FLOS agents, RAudit loop',           status: 'Running'           },
+  { id: 'p2', phase: 'Calibration + Testing',   dates: 'Mar 5 – 18',     startDate: toDate('2026-03-05'), endDate: toDate('2026-03-18'), barColor: 'bg-amber-300',  barRow: 0, focus: 'RAudit quality fix, balance checker, test framework', status: 'In progress'       },
+  { id: 'p3', phase: 'Design Sprint 1',         dates: 'Mar 5 – 18',     startDate: toDate('2026-03-05'), endDate: toDate('2026-03-18'), barColor: 'bg-purple-300', barRow: 1, focus: 'User stories, wireframes, component library',         status: 'Kicking off today' },
+  { id: 'p4', phase: 'Design Sprint 2 + Build', dates: 'Mar 19 – 31',    startDate: toDate('2026-03-19'), endDate: toDate('2026-03-31'), barColor: 'bg-green-300',  barRow: 0, focus: 'Hi-fi design, UI build, backend integration, QA',    status: 'Starting Mar 19'   },
+  { id: 'p5', phase: 'MVP Launch',              dates: 'Apr 1',          startDate: toDate('2026-04-01'), endDate: toDate('2026-04-01'), barColor: 'bg-rose-400',   barRow: 0, focus: 'Live with one client',                                status: 'Target'            },
+  { id: 'p6', phase: 'Beta',                    dates: 'Apr 2 – May 31', startDate: toDate('2026-04-02'), endDate: toDate('2026-05-31'), barColor: 'bg-violet-300', barRow: 0, focus: 'User feedback, iteration, stability hardening',       status: 'Not started'       },
 ];
 
-// Y positions for each tag chip lane (below milestone labels)
-const LANE_TOPS = [148, 173, 198];
+/** ID of the sprint whose date range contains today; falls back to the first sprint. */
+const DEFAULT_SPRINT_ID = SPRINTS.find(s => TODAY >= s.startDate && TODAY <= s.endDate)?.id ?? SPRINTS[0].id;
+
+// Y positions for each tag chip lane
+const LANE_TOPS = [130, 158, 186];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tag lane assignment
@@ -200,42 +214,25 @@ function assignLanes(items: TimelineItem[]) {
 type Confidence = 'On track' | 'Watch' | 'At risk';
 
 interface PhaseRow { id: string; phase: string; dates: string; focus: string; status: string; }
-interface MilestoneLabel { label: string; sub: string; }
 
 interface BoardData {
   title: string;
   subtext: string;
   confidence: Confidence;
-  milestones: MilestoneLabel[];
   phases: PhaseRow[];
   notes: { accomplished: string; remaining: string; risks: string };
   footer: string;
 }
 
-const BOARD_KEY = 'exec-timeline-board-v2';
+const BOARD_KEY = 'exec-timeline-board-v3';
 
 const DEFAULT_BOARD: BoardData = {
-  title: 'Q1 Program Timeline',
+  title: 'Program Timeline 2026',
   subtext: 'MVP Launch: April 1, 2026',
   confidence: 'On track',
-  milestones: [
-    { label: 'JAN',           sub: 'Pipeline start'        },
-    { label: 'FEB',           sub: 'Backend running'       },
-    { label: 'TODAY  Mar 5',  sub: 'Calibration kicks off' },
-    { label: 'Mar 18',        sub: 'Sprint 6 ends'         },
-    { label: 'Mar 31',        sub: 'MVP Dev complete'      },
-    { label: 'LAUNCH  Apr 1', sub: 'Q1 Target'             },
-  ],
-  phases: [
-    { id: 'p1', phase: 'Backend Pipeline',        dates: 'Jan – Mar 5',  focus: 'Analysis engine, FLOS agents, RAudit loop',           status: 'Running'           },
-    { id: 'p2', phase: 'Calibration + Testing',   dates: 'Mar 5 – 18',   focus: 'RAudit quality fix, balance checker, test framework', status: 'In progress'       },
-    { id: 'p3', phase: 'Design Sprint 1',         dates: 'Mar 5 – 18',   focus: 'User stories, wireframes, component library',         status: 'Kicking off today' },
-    { id: 'p4', phase: 'Design Sprint 2 + Build', dates: 'Mar 19 – 31',  focus: 'Hi-fi design, UI build, backend integration, QA',    status: 'Starting Mar 19'   },
-    { id: 'p5', phase: 'MVP Launch',              dates: 'Apr 1',        focus: 'Live with one client',                                status: 'Target'            },
-    { id: 'p6', phase: 'Beta',                    dates: 'Apr 2 – May 31', focus: 'User feedback, iteration, stability hardening',       status: 'Not started'       },
-  ],
+  phases: SPRINTS.map(s => ({ id: s.id, phase: s.phase, dates: s.dates, focus: s.focus, status: s.status })),
   notes: { accomplished: '', remaining: '', risks: '' },
-  footer: 'We are 27 days from launch. The backend analysis engine is running. UI work starts today.',
+  footer: 'Backend pipeline complete. Calibration and Design Sprint 1 are running in parallel through March 18.',
 };
 
 function loadBoard(): BoardData {
@@ -246,7 +243,6 @@ function loadBoard(): BoardData {
       return {
         ...DEFAULT_BOARD, ...p,
         notes: { ...DEFAULT_BOARD.notes, ...(p.notes ?? {}) },
-        milestones: p.milestones ?? DEFAULT_BOARD.milestones,
         phases: (p.phases ?? DEFAULT_BOARD.phases).map((row, i) => ({
           ...row, id: (row as PhaseRow).id ?? `p${i + 1}`,
         })),
@@ -502,6 +498,59 @@ function PhaseTagCounts({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SprintDetailCard — summary card for selected sprint in the lower panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SprintDetailCard({
+  sprint, phase, tags, onPatchPhase,
+}: {
+  sprint: Sprint;
+  phase: PhaseRow | undefined;
+  tags: TimelineItem[];
+  onPatchPhase: (field: keyof PhaseRow, value: string) => void;
+}) {
+  const displayFocus  = phase?.focus  ?? sprint.focus;
+  const displayStatus = phase?.status ?? sprint.status;
+
+  const phaseTags = tags.filter(t => t.phase_id === sprint.id);
+  const byType: Partial<Record<TagType, number>> = {};
+  for (const t of phaseTags) { byType[t.type] = (byType[t.type] ?? 0) + 1; }
+
+  return (
+    <div className="mb-4 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 bg-gray-50/60">
+        <div>
+          <p className="text-sm font-semibold text-gray-900">{phase?.phase ?? sprint.phase}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{sprint.dates}</p>
+        </div>
+        <StatusDropdown value={displayStatus} onChange={v => onPatchPhase('status', v)} />
+      </div>
+
+      <div className="px-4 py-3">
+        {displayFocus
+          ? <MarkdownFocusCell value={displayFocus} onChange={v => onPatchPhase('focus', v)} />
+          : <span className="text-xs text-gray-300 italic">No focus defined.</span>
+        }
+
+        {Object.entries(byType).length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {(Object.entries(byType) as [TagType, number][]).map(([type, count]) => {
+              const cfg = TAG_CONFIG[type];
+              const Icon = cfg.Icon;
+              return (
+                <span key={type} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg} ${cfg.text}`}>
+                  <Icon className="h-2.5 w-2.5" />{count} {cfg.label}{count > 1 ? 's' : ''}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -766,9 +815,6 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   useEffect(() => { localStorage.setItem(BOARD_KEY, JSON.stringify(board)); }, [board]);
 
   function patch<K extends keyof BoardData>(key: K, value: BoardData[K]) { setBoard(prev => ({ ...prev, [key]: value })); }
-  function patchMilestone(i: number, field: keyof MilestoneLabel, value: string) {
-    setBoard(prev => ({ ...prev, milestones: prev.milestones.map((m, idx) => idx === i ? { ...m, [field]: value } : m) }));
-  }
   function patchPhase(i: number, field: keyof PhaseRow, value: string) {
     setBoard(prev => ({ ...prev, phases: prev.phases.map((p, idx) => idx === i ? { ...p, [field]: value } : p) }));
   }
@@ -788,6 +834,18 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   function cycleConfidence() {
     const next = CONFIDENCE_CYCLE[(CONFIDENCE_CYCLE.indexOf(board.confidence) + 1) % CONFIDENCE_CYCLE.length];
     patch('confidence', next);
+  }
+
+  // ── PPTX Export ───────────────────────────────────────────────────────────
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportPptx() {
+    setExporting(true);
+    try {
+      await generateTimelinePptx(board, tags);
+    } finally {
+      setExporting(false);
+    }
   }
 
   // ── Drawer resize ────────────────────────────────────────────────────────
@@ -886,12 +944,12 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   }
 
   // ── UI state ─────────────────────────────────────────────────────────────
-  const [activeFilters, setActiveFilters] = useState<TagType[]>(FILTER_PRESETS);
-  const [selectedTag,   setSelectedTag]   = useState<TimelineItem | null>(null);
-  const [showAddForm,   setShowAddForm]   = useState(false);
-  const [editTag,       setEditTag]       = useState<FormDraft | null>(null);
-  const [highlightedPhaseIdx, setHighlightedPhaseIdx] = useState<number | null>(null);
-  const [filterByPhase, setFilterByPhase] = useState<string | null>(null);
+  const [activeFilters,    setActiveFilters]    = useState<TagType[]>(FILTER_PRESETS);
+  const [selectedTag,      setSelectedTag]      = useState<TimelineItem | null>(null);
+  const [showAddForm,      setShowAddForm]      = useState(false);
+  const [editTag,          setEditTag]          = useState<FormDraft | null>(null);
+  const [selectedSprintId, setSelectedSprintId] = useState<string>(DEFAULT_SPRINT_ID);
+  const [filterByPhase,    setFilterByPhase]    = useState<string | null>(null);
 
   function openEditForm(tag: TimelineItem) {
     const draft: FormDraft & { _editId: string } = {
@@ -945,13 +1003,18 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     if (el) el.scrollTo({ left: todayX() - el.clientWidth / 2, behavior: 'smooth' });
   }
 
-  function handlePhaseClick(i: number) {
-    const phaseId = board.phases[i]?.id ?? null;
-    setHighlightedPhaseIdx(i === highlightedPhaseIdx ? null : i);
-    setFilterByPhase(prev => prev === phaseId ? null : phaseId);
-    const scrollDate = PHASE_SCROLL_DATES[i] ?? TODAY;
+  function handleSprintSelect(sprintId: string) {
+    const sprint = SPRINTS.find(s => s.id === sprintId);
+    setSelectedSprintId(sprintId);
+    setFilterByPhase(prev => prev === sprintId ? null : sprintId);
+    const scrollDate = sprint?.startDate ?? TODAY;
     const el = timelineRef.current;
     if (el) el.scrollTo({ left: xFor(scrollDate) - el.clientWidth / 2, behavior: 'smooth' });
+  }
+
+  function handlePhaseClick(i: number) {
+    const phaseId = board.phases[i]?.id;
+    if (phaseId) handleSprintSelect(phaseId);
   }
 
   // Derived: visible tags after filters
@@ -1021,6 +1084,19 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
             </button>
 
             <div className="flex items-center gap-1 flex-none">
+              <Button
+                variant="outline" size="sm"
+                onClick={handleExportPptx}
+                disabled={exporting}
+                className="h-8 text-xs gap-1.5 print:hidden text-gray-600 border-gray-200 hover:bg-gray-50"
+                title="Export as PowerPoint"
+              >
+                {exporting
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Download className="h-3.5 w-3.5" />
+                }
+                {exporting ? 'Exporting…' : 'Export PPTX'}
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => window.print()}
                 className="text-gray-400 hover:text-gray-600 print:hidden" title="Print">
                 <Printer className="h-4 w-4" />
@@ -1075,9 +1151,9 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                 );
               })}
               {filterByPhase && (
-                <button onClick={() => { setFilterByPhase(null); setHighlightedPhaseIdx(null); }}
+                <button onClick={() => setFilterByPhase(null)}
                   className="ml-1 px-2 py-0.5 rounded-full text-[11px] bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1">
-                  {board.phases.find(p => p.id === filterByPhase)?.phase}
+                  {board.phases.find(p => p.id === filterByPhase)?.phase ?? SPRINTS.find(s => s.id === filterByPhase)?.phase}
                   <X className="h-2.5 w-2.5" />
                 </button>
               )}
@@ -1095,22 +1171,53 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
 
                 <div className="relative" style={{ width: TOTAL_WIDTH + 80, height: TRACK_HEIGHT + 40 }}>
 
-                  {/* Phase bars */}
-                  {PHASE_BAR_DATES.map((bar, i) => {
-                    const left  = xFor(bar.start);
-                    const width = xFor(bar.end) - left;
-                    const top   = 10 + (i % 2 === 0 ? 0 : 22);
-                    const isHL  = highlightedPhaseIdx === i;
+                  {/* Quarter background bands */}
+                  {QUARTERS.map(q => {
+                    const left  = xFor(q.start);
+                    const width = xFor(q.end) - left;
                     return (
-                      <div key={i} className={`absolute rounded-sm ${bar.color} transition-all`}
-                        style={{ left, top, width, height: isHL ? 22 : 16, opacity: isHL ? 1 : 0.6,
-                          outline: isHL ? '2px solid rgba(59,130,246,0.5)' : undefined }}
-                        title={board.phases[i]?.phase ?? ''} />
+                      <div key={q.label} className="absolute" style={{ left, top: 0, width, height: TRACK_HEIGHT + 40, background: q.bg }}>
+                        <span className="absolute left-2 top-1 text-[9px] font-bold tracking-widest select-none" style={{ color: q.labelColor }}>{q.label}</span>
+                      </div>
+                    );
+                  })}
+
+                  {/* Month tick marks */}
+                  {MONTH_TICKS.map(mt => {
+                    const x = xFor(mt.date);
+                    return (
+                      <div key={mt.label} className="absolute" style={{ left: x, top: 0 }}>
+                        <div className="w-px bg-gray-200/60" style={{ height: TRACK_HEIGHT + 40 }} />
+                        <div className="absolute top-1 left-1 text-[8px] text-gray-400/70 whitespace-nowrap font-medium select-none">{mt.label}</div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Sprint bars — clickable */}
+                  {SPRINTS.map(sprint => {
+                    const left     = xFor(sprint.startDate);
+                    const rawWidth = xFor(sprint.endDate) - left;
+                    const width    = Math.max(rawWidth, 6);
+                    const top      = sprint.barRow === 0 ? 22 : 40;
+                    const isSelected = selectedSprintId === sprint.id;
+                    const phase    = board.phases.find(p => p.id === sprint.id);
+                    return (
+                      <div key={sprint.id}
+                        className={`absolute rounded cursor-pointer transition-all ${sprint.barColor} ${isSelected ? 'ring-2 ring-blue-400 ring-offset-1 opacity-100' : 'opacity-70 hover:opacity-90'}`}
+                        style={{ left, top, width, height: isSelected ? 18 : 14 }}
+                        onClick={() => handleSprintSelect(sprint.id)}
+                        title={phase?.phase ?? sprint.phase}>
+                        {width > 36 && (
+                          <span className="absolute inset-0 flex items-center px-1.5 text-[8px] font-semibold text-white/90 truncate leading-none select-none">
+                            {phase?.phase ?? sprint.phase}
+                          </span>
+                        )}
+                      </div>
                     );
                   })}
 
                   {/* Baseline */}
-                  <div className="absolute left-0 right-0 bg-gray-200 rounded" style={{ top: 68, height: 2 }} />
+                  <div className="absolute left-0 right-0 bg-gray-300 rounded" style={{ top: 64, height: 1 }} />
 
                   {/* Range bars for range tags */}
                   {visibleTags.filter(t => t.start_date && t.end_date).map(t => {
@@ -1119,48 +1226,27 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                     const cfg = TAG_CONFIG[t.type];
                     return (
                       <div key={`range-${t.id}`} className={`absolute ${cfg.bg} border ${cfg.border} opacity-80 cursor-pointer`}
-                        style={{ left: x1, top: 63, width: Math.max(x2 - x1, 4), height: 8, borderRadius: 4 }}
+                        style={{ left: x1, top: 61, width: Math.max(x2 - x1, 4), height: 5, borderRadius: 3 }}
                         onClick={() => setSelectedTag(t)} title={t.title} />
                     );
                   })}
 
-                  {/* TODAY band */}
-                  <div className="absolute" style={{ left: xFor(TODAY) - 1, top: 0, width: 3, height: TRACK_HEIGHT, background: 'rgba(59,130,246,0.10)' }} />
+                  {/* TODAY line */}
+                  <div className="absolute" style={{ left: xFor(TODAY) - 1, top: 0, width: 2, height: TRACK_HEIGHT + 40, background: 'rgba(59,130,246,0.14)' }} />
 
-                  {/* Milestone ticks + labels */}
-                  {MILESTONE_DATES.map((m, i) => {
-                    const x  = xFor(m.date);
-                    const ml = board.milestones[i];
-                    return (
-                      <div key={i} className="absolute" style={{ left: x, top: 54 }}>
-                        <div className={`w-px mx-auto ${m.isToday ? 'bg-blue-500 h-8' : m.isLaunch ? 'bg-purple-500 h-6' : 'bg-gray-300 h-4'}`} />
-                        <div className={`mt-2 whitespace-nowrap text-[11px] font-medium -translate-x-1/2 ${m.isToday ? 'text-blue-600' : m.isLaunch ? 'text-purple-700' : 'text-gray-500'}`}>
-                          <EditableText value={ml?.label ?? ''} onChange={v => patchMilestone(i, 'label', v)}
-                            className={`text-[11px] font-medium ${m.isToday ? 'text-blue-600' : m.isLaunch ? 'text-purple-700' : 'text-gray-500'}`} />
-                        </div>
-                        <div className="mt-0.5 whitespace-nowrap text-[10px] text-gray-400 -translate-x-1/2">
-                          <EditableText value={ml?.sub ?? ''} onChange={v => patchMilestone(i, 'sub', v)} className="text-[10px] text-gray-400" />
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {/* TODAY badge */}
-                  <div className="absolute" style={{ left: xFor(TODAY), top: 18 }}>
-                    <div className="-translate-x-1/2 inline-flex items-center bg-blue-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm">TODAY</div>
+                  {/* TODAY badge with ET date */}
+                  <div className="absolute flex flex-col items-center" style={{ left: xFor(TODAY), top: 66 }}>
+                    <div className="-translate-x-1/2 inline-flex flex-col items-center bg-blue-500 text-white rounded-full shadow px-2 py-0.5 gap-0">
+                      <span className="text-[8px] font-bold leading-tight tracking-wide">TODAY</span>
+                      <span className="text-[7px] leading-tight opacity-90">{TODAY_DISPLAY} ET</span>
+                    </div>
                   </div>
 
-                  {/* Q1 Target badge */}
-                  <div className="absolute" style={{ left: xFor(toDate('2026-04-01')), top: 18 }}>
-                    <div className="-translate-x-1/2 inline-flex items-center bg-purple-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm">Q1 Target</div>
-                  </div>
-
-                  {/* Beta phase label — centered over the Beta bar */}
-                  <div className="absolute" style={{
-                    left: (xFor(toDate('2026-04-02')) + xFor(toDate('2026-05-31'))) / 2,
-                    top: 18,
-                  }}>
-                    <div className="-translate-x-1/2 inline-flex items-center bg-violet-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm">Beta</div>
+                  {/* MVP Launch marker */}
+                  <div className="absolute" style={{ left: xFor(toDate('2026-04-01')), top: 66 }}>
+                    <div className="-translate-x-1/2 inline-flex items-center bg-rose-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-full shadow whitespace-nowrap">
+                      🚀 Apr 1
+                    </div>
                   </div>
 
                   {/* Tag chips */}
@@ -1168,10 +1254,10 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                     const cfg    = TAG_CONFIG[tag.type];
                     const Icon   = cfg.Icon;
                     const laneY  = LANE_TOPS[lane];
-                    const connH  = laneY - 70;
+                    const connH  = laneY - 66;
                     const isSelected = selectedTag?.id === tag.id;
                     return (
-                      <div key={tag.id} className="absolute" style={{ left: x, top: 70 }}>
+                      <div key={tag.id} className="absolute" style={{ left: x, top: 66 }}>
                         {/* Connector line */}
                         <div className={`absolute w-px ${isSelected ? cfg.dot : 'bg-gray-200'}`}
                           style={{ left: 0, top: 0, height: connH }} />
@@ -1198,8 +1284,23 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
             <div className="mb-6">
               <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
                 Phase Summary
-                <span className="ml-2 normal-case font-normal text-gray-300 text-[10px]">— click row to filter timeline · click cell to edit</span>
+                <span className="ml-2 normal-case font-normal text-gray-300 text-[10px]">— click bar or row to select · click cell to edit</span>
               </h3>
+
+              {/* Sprint detail card — shown for the currently selected sprint */}
+              {(() => {
+                const sprint   = SPRINTS.find(s => s.id === selectedSprintId);
+                const phaseIdx = board.phases.findIndex(p => p.id === selectedSprintId);
+                if (!sprint) return null;
+                return (
+                  <SprintDetailCard
+                    sprint={sprint}
+                    phase={board.phases[phaseIdx]}
+                    tags={tags}
+                    onPatchPhase={(field, value) => { if (phaseIdx >= 0) patchPhase(phaseIdx, field, value); }}
+                  />
+                );
+              })()}
 
               <div className="overflow-x-auto rounded-lg border border-gray-100">
                 <table className="min-w-full text-sm">
@@ -1213,10 +1314,10 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                   </thead>
                   <tbody>
                     {board.phases.map((row, i) => {
-                      const isHL = highlightedPhaseIdx === i;
+                      const isHL = row.id === selectedSprintId;
                       return (
                         <tr key={row.id}
-                          className={`group border-b border-gray-50 transition-colors ${isHL ? 'bg-blue-50/50' : i % 2 === 1 ? 'bg-gray-50/40' : ''}`}>
+                          className={`group border-b border-gray-50 transition-colors cursor-pointer ${isHL ? 'bg-blue-50/60 ring-1 ring-inset ring-blue-100' : i % 2 === 1 ? 'bg-gray-50/40' : ''}`}>
                           <td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap cursor-pointer"
                             onClick={() => handlePhaseClick(i)}>
                             <EditableText value={row.phase} onChange={v => patchPhase(i, 'phase', v)}
