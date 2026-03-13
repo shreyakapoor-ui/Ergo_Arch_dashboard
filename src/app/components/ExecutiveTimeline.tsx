@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Printer, Calendar, TrendingUp, TrendingDown, Minus,
   ChevronRight, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
   Flag, AlertTriangle, GitBranch, Link2, Shuffle, Globe, Ban,
-  ArrowRight, Loader2, Download,
+  ArrowRight, Loader2, Download, GripVertical,
 } from 'lucide-react';
 import { generateTimelinePptx } from '../utils/generateTimelinePptx';
 import { Button } from './ui/button';
@@ -75,8 +75,6 @@ const PROGRAM_ID = 'ergo-q1';
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Timeline geometry constants ─────────────────────────────────────────────
-// All fixed program dates use T12:00:00 (local noon) so they're consistent
-// with date strings produced by toDate(), which also appends T12:00:00.
 const TIMELINE_START = new Date('2026-01-01T12:00:00');
 const TIMELINE_END   = new Date('2026-12-31T12:00:00');
 const PX_PER_DAY     = 8;
@@ -86,7 +84,6 @@ const PX_PER_DAY     = 8;
 function daysBetween(a: Date, b: Date) {
   return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 }
-// xFor is shadowed inside the component with a zoom-reactive version (see pxPerDay state)
 /** Parse a YYYY-MM-DD string as local noon to avoid UTC-offset day-shift bugs. */
 function toDate(s: string): Date {
   return new Date(s.length === 10 ? s + 'T12:00:00' : s);
@@ -127,50 +124,12 @@ const TODAY_DISPLAY = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', month: 'short', day: 'numeric',
 }).format(new Date());
 
-const TRACK_HEIGHT = 220;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Static timeline geometry
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─── Quarter segmentation bands ───────────────────────────────────────────────
-const QUARTERS = [
-  { label: 'Q1', start: toDate('2026-01-01'), end: toDate('2026-03-31'), bg: 'rgba(219,234,254,0.28)', labelColor: '#60a5fa' },
-  { label: 'Q2', start: toDate('2026-04-01'), end: toDate('2026-06-30'), bg: 'rgba(209,250,229,0.28)', labelColor: '#34d399' },
-  { label: 'Q3', start: toDate('2026-07-01'), end: toDate('2026-09-30'), bg: 'rgba(254,243,199,0.28)', labelColor: '#fbbf24' },
-  { label: 'Q4', start: toDate('2026-10-01'), end: toDate('2026-12-31'), bg: 'rgba(237,233,254,0.28)', labelColor: '#a78bfa' },
-];
-
 // Monthly tick marks across the full year
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTH_TICKS = Array.from({ length: 12 }, (_, m) => ({
   date: new Date(2026, m, 1, 12, 0, 0),
   label: MONTH_LABELS[m],
 }));
-
-// ─── Sprint data — source of truth for timeline bars and lower panel ──────────
-interface Sprint {
-  id: string; phase: string; dates: string;
-  startDate: Date; endDate: Date;
-  barColor: string;   // Tailwind bg class
-  barRow: 0 | 1;     // which row to render in (0=top, 1=bottom)
-  focus: string; status: string;
-}
-
-const SPRINTS: Sprint[] = [
-  { id: 'p1', phase: 'Backend Pipeline',        dates: 'Jan – Mar 5',     startDate: toDate('2026-01-01'), endDate: toDate('2026-03-05'), barColor: 'bg-blue-300',   barRow: 0, focus: 'Analysis engine, FLOS agents, RAudit loop',           status: 'Running'           },
-  { id: 'p2', phase: 'Calibration + Testing',   dates: 'Mar 5 – 18',     startDate: toDate('2026-03-05'), endDate: toDate('2026-03-18'), barColor: 'bg-amber-300',  barRow: 0, focus: 'RAudit quality fix, balance checker, test framework', status: 'In progress'       },
-  { id: 'p3', phase: 'Design Sprint 1',         dates: 'Mar 5 – 18',     startDate: toDate('2026-03-05'), endDate: toDate('2026-03-18'), barColor: 'bg-purple-300', barRow: 1, focus: 'User stories, wireframes, component library',         status: 'Kicking off today' },
-  { id: 'p4', phase: 'Design Sprint 2 + Build', dates: 'Mar 19 – 31',    startDate: toDate('2026-03-19'), endDate: toDate('2026-03-31'), barColor: 'bg-green-300',  barRow: 0, focus: 'Hi-fi design, UI build, backend integration, QA',    status: 'Starting Mar 19'   },
-  { id: 'p5', phase: 'MVP Launch',              dates: 'Apr 1',          startDate: toDate('2026-04-01'), endDate: toDate('2026-04-01'), barColor: 'bg-rose-400',   barRow: 0, focus: 'Live with one client',                                status: 'Target'            },
-  { id: 'p6', phase: 'Beta',                    dates: 'Apr 2 – May 31', startDate: toDate('2026-04-02'), endDate: toDate('2026-05-31'), barColor: 'bg-violet-300', barRow: 0, focus: 'User feedback, iteration, stability hardening',       status: 'Not started'       },
-];
-
-/** ID of the sprint whose date range contains today; falls back to the first sprint. */
-const DEFAULT_SPRINT_ID = SPRINTS.find(s => TODAY >= s.startDate && TODAY <= s.endDate)?.id ?? SPRINTS[0].id;
-
-// Y positions for each tag chip lane
-const LANE_TOPS = [130, 158, 186];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tag lane assignment
@@ -195,52 +154,130 @@ function assignLanes(items: TimelineItem[], xFn: (d: Date) => number) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Board data (localStorage)
+// New data model
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Confidence = 'On track' | 'Watch' | 'At risk';
 
 interface PhaseRow { id: string; phase: string; dates: string; focus: string; status: string; }
 
-interface BoardData {
+interface GridCol { id: string; label: string; }
+interface GridRow { id: string; cells: Record<string, string>; }
+interface GridData { columns: GridCol[]; rows: GridRow[]; }
+
+interface SprintItem {
+  id: string;
+  label: string;
+  startDate: string;   // 'YYYY-MM-DD'
+  endDate: string;     // 'YYYY-MM-DD'
+  color: string;       // hex color for the bar
+  status: string;
+  grid: GridData;
+  notes: string;
+}
+
+interface QuarterItem {
+  id: string;
+  label: string;       // e.g. "Q1 2026"
+  startDate: string;
+  endDate: string;
+  color: string;       // hex color for the quarter bar
+  sprints: SprintItem[];
+  grid: GridData;
+  notes: string;
+}
+
+interface TimelineBoard {
   title: string;
   subtext: string;
   confidence: Confidence;
-  phases: PhaseRow[];
-  notes: { accomplished: string; remaining: string; risks: string };
+  quarters: QuarterItem[];
   footer: string;
 }
 
-const BOARD_KEY = 'exec-timeline-board-v3';
+// ─────────────────────────────────────────────────────────────────────────────
+// Default data
+// ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_BOARD: BoardData = {
-  title: 'Program Timeline 2026',
-  subtext: 'MVP Launch: April 1, 2026',
-  confidence: 'On track',
-  phases: SPRINTS.map(s => ({ id: s.id, phase: s.phase, dates: s.dates, focus: s.focus, status: s.status })),
-  notes: { accomplished: '', remaining: '', risks: '' },
-  footer: 'Backend pipeline complete. Calibration and Design Sprint 1 are running in parallel through March 18.',
-};
+function emptyGrid(): GridData {
+  return {
+    columns: [
+      { id: 'c1', label: 'Item' },
+      { id: 'c2', label: 'Owner' },
+      { id: 'c3', label: 'Status' },
+    ],
+    rows: [],
+  };
+}
 
-function loadBoard(): BoardData {
+const DEFAULT_QUARTERS: QuarterItem[] = [
+  {
+    id: 'q1', label: 'Q1 2026',
+    startDate: '2026-01-01', endDate: '2026-03-31',
+    color: '#3b82f6',
+    sprints: [
+      { id: 'p1', label: 'Backend Pipeline', startDate: '2026-01-01', endDate: '2026-03-05', color: '#93c5fd', status: 'Done', grid: emptyGrid(), notes: '' },
+      { id: 'p2', label: 'Calibration + Testing', startDate: '2026-03-05', endDate: '2026-03-18', color: '#fcd34d', status: 'In progress', grid: emptyGrid(), notes: '' },
+      { id: 'p3', label: 'Design Sprint 1', startDate: '2026-03-05', endDate: '2026-03-18', color: '#c4b5fd', status: 'Kicking off today', grid: emptyGrid(), notes: '' },
+      { id: 'p4', label: 'Design Sprint 2 + Build', startDate: '2026-03-19', endDate: '2026-03-31', color: '#6ee7b7', status: 'Starting Mar 19', grid: emptyGrid(), notes: '' },
+    ],
+    grid: emptyGrid(), notes: '',
+  },
+  {
+    id: 'q2', label: 'Q2 2026',
+    startDate: '2026-04-01', endDate: '2026-06-30',
+    color: '#10b981',
+    sprints: [
+      { id: 'p5', label: 'MVP Launch', startDate: '2026-04-01', endDate: '2026-04-01', color: '#f87171', status: 'Target', grid: emptyGrid(), notes: '' },
+      { id: 'p6', label: 'Beta', startDate: '2026-04-02', endDate: '2026-05-31', color: '#a78bfa', status: 'Not started', grid: emptyGrid(), notes: '' },
+    ],
+    grid: emptyGrid(), notes: '',
+  },
+  {
+    id: 'q3', label: 'Q3 2026',
+    startDate: '2026-07-01', endDate: '2026-09-30',
+    color: '#f59e0b',
+    sprints: [],
+    grid: emptyGrid(), notes: '',
+  },
+  {
+    id: 'q4', label: 'Q4 2026',
+    startDate: '2026-10-01', endDate: '2026-12-31',
+    color: '#8b5cf6',
+    sprints: [],
+    grid: emptyGrid(), notes: '',
+  },
+];
+
+const BOARD_KEY = 'exec-timeline-board-v4';
+
+function loadBoard(): TimelineBoard {
   try {
     const raw = localStorage.getItem(BOARD_KEY);
     if (raw) {
-      const p = JSON.parse(raw) as Partial<BoardData>;
+      const p = JSON.parse(raw) as Partial<TimelineBoard>;
       return {
-        ...DEFAULT_BOARD, ...p,
-        notes: { ...DEFAULT_BOARD.notes, ...(p.notes ?? {}) },
-        phases: (p.phases ?? DEFAULT_BOARD.phases).map((row, i) => ({
-          ...row, id: (row as PhaseRow).id ?? `p${i + 1}`,
-        })),
+        title: p.title ?? 'Program Timeline 2026',
+        subtext: p.subtext ?? 'MVP Launch: April 1, 2026',
+        confidence: p.confidence ?? 'On track',
+        footer: p.footer ?? '',
+        quarters: p.quarters ?? DEFAULT_QUARTERS,
       };
     }
   } catch {}
-  return { ...DEFAULT_BOARD, notes: { ...DEFAULT_BOARD.notes } };
+  return {
+    title: 'Program Timeline 2026',
+    subtext: 'MVP Launch: April 1, 2026',
+    confidence: 'On track',
+    footer: 'Backend pipeline complete. Calibration and Design Sprint 1 running in parallel through March 18.',
+    quarters: DEFAULT_QUARTERS,
+  };
 }
 
-let _idSeq = 100;
-function nextId() { return `ph${++_idSeq}`; }
+function autoSelectQuarterId(quarters: QuarterItem[]): string | null {
+  const q = quarters.find(q => TODAY >= toDate(q.startDate) && TODAY <= toDate(q.endDate));
+  return q?.id ?? quarters[0]?.id ?? null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Confidence config
@@ -490,54 +527,125 @@ function PhaseTagCounts({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SprintDetailCard — summary card for selected sprint in the lower panel
+// FlexGrid — editable planning grid
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SprintDetailCard({
-  sprint, phase, tags, onPatchPhase,
-}: {
-  sprint: Sprint;
-  phase: PhaseRow | undefined;
-  tags: TimelineItem[];
-  onPatchPhase: (field: keyof PhaseRow, value: string) => void;
-}) {
-  const displayFocus  = phase?.focus  ?? sprint.focus;
-  const displayStatus = phase?.status ?? sprint.status;
+function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) => void }) {
+  const [editCell, setEditCell] = useState<{ r: string; c: string } | null>(null);
+  const [editColId, setEditColId] = useState<string | null>(null);
 
-  const phaseTags = tags.filter(t => t.phase_id === sprint.id);
-  const byType: Partial<Record<TagType, number>> = {};
-  for (const t of phaseTags) { byType[t.type] = (byType[t.type] ?? 0) + 1; }
+  function addRow() {
+    const id = `r${Date.now()}`;
+    const cells: Record<string, string> = {};
+    data.columns.forEach(c => { cells[c.id] = ''; });
+    onChange({ ...data, rows: [...data.rows, { id, cells }] });
+  }
+  function deleteRow(rid: string) { onChange({ ...data, rows: data.rows.filter(r => r.id !== rid) }); }
+  function moveRow(rid: string, dir: -1 | 1) {
+    const idx = data.rows.findIndex(r => r.id === rid);
+    if (idx < 0) return;
+    const rows = [...data.rows];
+    const j = idx + dir;
+    if (j < 0 || j >= rows.length) return;
+    [rows[idx], rows[j]] = [rows[j], rows[idx]];
+    onChange({ ...data, rows });
+  }
+  function updateCell(rid: string, cid: string, val: string) {
+    onChange({ ...data, rows: data.rows.map(r => r.id === rid ? { ...r, cells: { ...r.cells, [cid]: val } } : r) });
+  }
+  function addColumn() {
+    const id = `c${Date.now()}`;
+    onChange({
+      columns: [...data.columns, { id, label: 'Column' }],
+      rows: data.rows.map(r => ({ ...r, cells: { ...r.cells, [id]: '' } })),
+    });
+  }
+  function renameCol(cid: string, label: string) {
+    onChange({ ...data, columns: data.columns.map(c => c.id === cid ? { ...c, label } : c) });
+  }
+  function deleteCol(cid: string) {
+    if (data.columns.length <= 1) return;
+    onChange({
+      columns: data.columns.filter(c => c.id !== cid),
+      rows: data.rows.map(r => { const cells = { ...r.cells }; delete cells[cid]; return { ...r, cells }; }),
+    });
+  }
 
   return (
-    <div className="mb-4 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 bg-gray-50/60">
-        <div>
-          <p className="text-sm font-semibold text-gray-900">{phase?.phase ?? sprint.phase}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{sprint.dates}</p>
-        </div>
-        <StatusDropdown value={displayStatus} onChange={v => onPatchPhase('status', v)} />
-      </div>
-
-      <div className="px-4 py-3">
-        {displayFocus
-          ? <MarkdownFocusCell value={displayFocus} onChange={v => onPatchPhase('focus', v)} />
-          : <span className="text-xs text-gray-300 italic">No focus defined.</span>
-        }
-
-        {Object.entries(byType).length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {(Object.entries(byType) as [TagType, number][]).map(([type, count]) => {
-              const cfg = TAG_CONFIG[type];
-              const Icon = cfg.Icon;
-              return (
-                <span key={type} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg} ${cfg.text}`}>
-                  <Icon className="h-2.5 w-2.5" />{count} {cfg.label}{count > 1 ? 's' : ''}
-                </span>
-              );
-            })}
-          </div>
-        )}
-      </div>
+    <div className="rounded-lg border border-gray-100 overflow-hidden">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="bg-gray-50 border-b border-gray-100">
+            {data.columns.map(col => (
+              <th key={col.id} className="px-3 py-2 text-left font-medium text-gray-500 text-xs">
+                <div className="group/col flex items-center gap-1">
+                  {editColId === col.id
+                    ? <input autoFocus value={col.label}
+                        onChange={e => renameCol(col.id, e.target.value)}
+                        onBlur={() => setEditColId(null)}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditColId(null); }}
+                        className="w-full bg-transparent outline-none border-b border-blue-300 text-xs font-medium" />
+                    : <span onClick={() => setEditColId(col.id)} className="cursor-pointer hover:text-gray-700 uppercase tracking-wide">{col.label}</span>
+                  }
+                  {data.columns.length > 1 && (
+                    <button onClick={() => deleteCol(col.id)} className="opacity-0 group-hover/col:opacity-100 ml-auto text-gray-300 hover:text-red-400 flex-none transition-opacity">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  )}
+                </div>
+              </th>
+            ))}
+            <th className="w-8 px-2 py-2">
+              <button onClick={addColumn} title="Add column" className="text-gray-300 hover:text-blue-500 transition-colors">
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </th>
+            <th className="w-20" />
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, ri) => (
+            <tr key={row.id} className="group/row border-b border-gray-50 hover:bg-blue-50/30 transition-colors">
+              {data.columns.map(col => (
+                <td key={col.id} className="px-3 py-2" onClick={() => setEditCell({ r: row.id, c: col.id })}>
+                  {editCell?.r === row.id && editCell?.c === col.id
+                    ? <input autoFocus value={row.cells[col.id] ?? ''}
+                        onChange={e => updateCell(row.id, col.id, e.target.value)}
+                        onBlur={() => setEditCell(null)}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditCell(null); }}
+                        className="w-full bg-transparent outline-none border-b border-blue-300 min-w-[80px]" />
+                    : <span className="cursor-text text-gray-700">{row.cells[col.id] || <span className="text-gray-300">—</span>}</span>
+                  }
+                </td>
+              ))}
+              <td className="w-8" />
+              <td className="pr-2 py-1 w-20">
+                <div className="opacity-0 group-hover/row:opacity-100 flex items-center gap-0.5 justify-end transition-opacity">
+                  <button onClick={() => moveRow(row.id, -1)} disabled={ri === 0} className="p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 transition-colors">
+                    <ChevronUp className="h-3 w-3" />
+                  </button>
+                  <button onClick={() => moveRow(row.id, 1)} disabled={ri === data.rows.length - 1} className="p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 transition-colors">
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                  <button onClick={() => deleteRow(row.id)} className="p-0.5 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors">
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+          {data.rows.length === 0 && (
+            <tr>
+              <td colSpan={data.columns.length + 2} className="px-3 py-4 text-center text-xs text-gray-300">
+                No rows yet — click + Add row to start
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <button onClick={addRow} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-600 px-3 py-2.5 transition-colors w-full hover:bg-gray-50">
+        <Plus className="h-3 w-3" />Add row
+      </button>
     </div>
   );
 }
@@ -798,30 +906,19 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
 
   // ── Board (localStorage) ─────────────────────────────────────────────────
-  const [board, setBoard] = useState<BoardData>(loadBoard);
+  const [board, setBoard] = useState<TimelineBoard>(loadBoard);
   useEffect(() => { localStorage.setItem(BOARD_KEY, JSON.stringify(board)); }, [board]);
 
-  function patch<K extends keyof BoardData>(key: K, value: BoardData[K]) { setBoard(prev => ({ ...prev, [key]: value })); }
-  function patchPhase(i: number, field: keyof PhaseRow, value: string) {
-    setBoard(prev => ({ ...prev, phases: prev.phases.map((p, idx) => idx === i ? { ...p, [field]: value } : p) }));
-  }
-  function addPhase() {
-    setBoard(prev => ({ ...prev, phases: [...prev.phases, { id: nextId(), phase: 'New phase', dates: '', focus: '', status: 'Not started' }] }));
-  }
-  function deletePhase(i: number) { setBoard(prev => ({ ...prev, phases: prev.phases.filter((_, idx) => idx !== i) })); }
-  function movePhase(i: number, dir: -1 | 1) {
-    const j = i + dir;
-    setBoard(prev => {
-      if (j < 0 || j >= prev.phases.length) return prev;
-      const phases = [...prev.phases];
-      [phases[i], phases[j]] = [phases[j], phases[i]];
-      return { ...prev, phases };
-    });
-  }
-  function cycleConfidence() {
-    const next = CONFIDENCE_CYCLE[(CONFIDENCE_CYCLE.indexOf(board.confidence) + 1) % CONFIDENCE_CYCLE.length];
-    patch('confidence', next);
-  }
+  // ── Timeline selection ───────────────────────────────────────────────────
+  const [selectedQuarterId, setSelectedQuarterId] = useState<string | null>(() => autoSelectQuarterId(loadBoard().quarters));
+  const [selectedSprintId, setSelectedSprintId]   = useState<string | null>(null);
+  const [viewMode, setViewMode]                   = useState<'quarter' | 'sprint'>('sprint');
+
+  // ── Zoom ─────────────────────────────────────────────────────────────────
+  const [pxPerDay, setPxPerDay] = useState(PX_PER_DAY);
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  const xFor = (date: Date) => daysBetween(TIMELINE_START, date) * pxPerDay;
+  const totalWidth = daysBetween(TIMELINE_START, TIMELINE_END) * pxPerDay;
 
   // ── PPTX Export ───────────────────────────────────────────────────────────
   const [exporting, setExporting] = useState(false);
@@ -829,7 +926,20 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   async function handleExportPptx() {
     setExporting(true);
     try {
-      await generateTimelinePptx({ ...board, milestones: [] }, tags);
+      const boardForExport = {
+        title: board.title,
+        subtext: board.subtext,
+        confidence: board.confidence,
+        phases: board.quarters.flatMap(q => q.sprints.map(s => ({
+          id: s.id, phase: s.label,
+          dates: `${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`,
+          focus: s.notes, status: s.status,
+        }))),
+        notes: { accomplished: '', remaining: '', risks: '' },
+        footer: board.footer,
+        milestones: [],
+      };
+      await generateTimelinePptx(boardForExport, tags);
     } finally {
       setExporting(false);
     }
@@ -931,18 +1041,11 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   }
 
   // ── UI state ─────────────────────────────────────────────────────────────
-  const [activeFilters,    setActiveFilters]    = useState<TagType[]>(FILTER_PRESETS);
-  const [selectedTag,      setSelectedTag]      = useState<TimelineItem | null>(null);
-  const [showAddForm,      setShowAddForm]      = useState(false);
-  const [editTag,          setEditTag]          = useState<FormDraft | null>(null);
-  const [selectedSprintId, setSelectedSprintId] = useState<string>(DEFAULT_SPRINT_ID);
-  const [filterByPhase,    setFilterByPhase]    = useState<string | null>(null);
-  const [pxPerDay,         setPxPerDay]         = useState(PX_PER_DAY);
-
-  // Zoom-reactive geometry — shadows module-level xFor and TOTAL_WIDTH
-  // eslint-disable-next-line @typescript-eslint/no-shadow
-  const xFor = (date: Date) => daysBetween(TIMELINE_START, date) * pxPerDay;
-  const totalWidth = daysBetween(TIMELINE_START, TIMELINE_END) * pxPerDay;
+  const [activeFilters, setActiveFilters] = useState<TagType[]>(FILTER_PRESETS);
+  const [selectedTag,   setSelectedTag]   = useState<TimelineItem | null>(null);
+  const [showAddForm,   setShowAddForm]   = useState(false);
+  const [editTag,       setEditTag]       = useState<FormDraft | null>(null);
+  const [filterByPhase, setFilterByPhase] = useState<string | null>(null);
 
   function openEditForm(tag: TimelineItem) {
     const draft: FormDraft & { _editId: string } = {
@@ -967,7 +1070,148 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     setActiveFilters(prev => prev.includes(t) ? prev.filter(f => f !== t) : [...prev, t]);
   }
 
-  // ESC priority: close form → close detail panel → close drawer
+  // ── Derived ──────────────────────────────────────────────────────────────
+  const selectedQuarter = board.quarters.find(q => q.id === selectedQuarterId) ?? null;
+  const selectedSprint  = selectedQuarter?.sprints.find(s => s.id === selectedSprintId) ?? null;
+  const allPhases: PhaseRow[] = board.quarters.flatMap(q =>
+    q.sprints.map(s => ({ id: s.id, phase: s.label, dates: `${s.startDate} – ${s.endDate}`, focus: '', status: s.status }))
+  );
+
+  // ── Board patch helpers ───────────────────────────────────────────────────
+  function patchBoard<K extends keyof TimelineBoard>(key: K, value: TimelineBoard[K]) {
+    setBoard(prev => ({ ...prev, [key]: value }));
+  }
+  function patchQuarter(qid: string, updates: Partial<QuarterItem>) {
+    setBoard(prev => ({ ...prev, quarters: prev.quarters.map(q => q.id === qid ? { ...q, ...updates } : q) }));
+  }
+  function patchSprint(qid: string, sid: string, updates: Partial<SprintItem>) {
+    setBoard(prev => ({
+      ...prev,
+      quarters: prev.quarters.map(q => q.id !== qid ? q : {
+        ...q,
+        sprints: q.sprints.map(s => s.id !== sid ? s : { ...s, ...updates }),
+      }),
+    }));
+  }
+  function addQuarter() {
+    const last = board.quarters[board.quarters.length - 1];
+    const start = last ? new Date(toDate(last.endDate).getTime() + 86400000) : new Date('2026-01-01T12:00:00');
+    const end = new Date(start.getTime() + 89 * 86400000);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const colors = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ec4899','#14b8a6'];
+    const newQ: QuarterItem = {
+      id: `q${Date.now()}`,
+      label: `Q${board.quarters.length + 1} ${start.getFullYear()}`,
+      startDate: fmt(start), endDate: fmt(end),
+      color: colors[board.quarters.length % colors.length],
+      sprints: [], grid: emptyGrid(), notes: '',
+    };
+    setBoard(prev => ({ ...prev, quarters: [...prev.quarters, newQ] }));
+    setSelectedQuarterId(newQ.id);
+    setSelectedSprintId(null);
+  }
+  function addSprint() {
+    if (!selectedQuarterId) return;
+    const q = board.quarters.find(q => q.id === selectedQuarterId);
+    if (!q) return;
+    const last = q.sprints[q.sprints.length - 1];
+    const start = last ? new Date(toDate(last.endDate).getTime() + 86400000) : toDate(q.startDate);
+    const end = new Date(Math.min(start.getTime() + 13 * 86400000, toDate(q.endDate).getTime()));
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const sprintColors = ['#93c5fd','#fcd34d','#c4b5fd','#6ee7b7','#fca5a5','#a5f3fc'];
+    const newS: SprintItem = {
+      id: `s${Date.now()}`,
+      label: `Sprint ${q.sprints.length + 1}`,
+      startDate: fmt(start), endDate: fmt(end),
+      color: sprintColors[q.sprints.length % sprintColors.length],
+      status: 'Not started', grid: emptyGrid(), notes: '',
+    };
+    patchQuarter(selectedQuarterId, { sprints: [...q.sprints, newS] });
+    setSelectedSprintId(newS.id);
+  }
+  function deleteQuarter(qid: string) {
+    setBoard(prev => ({ ...prev, quarters: prev.quarters.filter(q => q.id !== qid) }));
+    if (selectedQuarterId === qid) { setSelectedQuarterId(null); setSelectedSprintId(null); }
+  }
+  function deleteSprint(qid: string, sid: string) {
+    const q = board.quarters.find(q => q.id === qid);
+    if (q) patchQuarter(qid, { sprints: q.sprints.filter(s => s.id !== sid) });
+    if (selectedSprintId === sid) setSelectedSprintId(null);
+  }
+  function cycleConfidence() {
+    const next = CONFIDENCE_CYCLE[(CONFIDENCE_CYCLE.indexOf(board.confidence) + 1) % CONFIDENCE_CYCLE.length];
+    patchBoard('confidence', next);
+  }
+
+  // ── Sprint row assignment helper ─────────────────────────────────────────
+  function assignSprintRows(sprints: SprintItem[]) {
+    const sorted = [...sprints].sort((a, b) => toDate(a.startDate).getTime() - toDate(b.startDate).getTime());
+    const rowEnd: [number, number] = [-Infinity, -Infinity];
+    return sorted.map(sprint => {
+      const start = toDate(sprint.startDate).getTime();
+      const end = toDate(sprint.endDate).getTime();
+      const row: 0 | 1 = start >= rowEnd[0] ? 0 : 1;
+      rowEnd[row] = end;
+      return { ...sprint, row };
+    });
+  }
+
+  // ── Timeline geometry variables ───────────────────────────────────────────
+  const Q_BAR_TOP = 14;
+  const Q_BAR_H = 52;
+  const S_BAR_TOP = [80, 118] as const;
+  const S_BAR_H = 32;
+  const BASELINE_Y = 70;
+  const S_BASELINE_Y = 160;
+  const Q_BASELINE_Y = 74;
+  const CHIP_ANCHOR_Y = viewMode === 'sprint' ? S_BASELINE_Y : Q_BASELINE_Y;
+  const LANE_TOPS_SPRINT = [170, 196, 222] as const;
+  const LANE_TOPS_QUARTER = [90, 116, 142] as const;
+  const LANE_TOPS = viewMode === 'sprint' ? LANE_TOPS_SPRINT : LANE_TOPS_QUARTER;
+  const CANVAS_H = viewMode === 'sprint' ? 248 : 170;
+
+  // ── Scroll helpers ────────────────────────────────────────────────────────
+  function scrollToToday() {
+    const el = timelineRef.current;
+    const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
+    if (el) el.scrollTo({ left: xFor(clamped) - el.clientWidth / 2, behavior: 'smooth' });
+  }
+
+  function handleSelectQuarter(qid: string) {
+    setSelectedQuarterId(qid);
+    setSelectedSprintId(null);
+    setFilterByPhase(qid);
+    const q = board.quarters.find(q => q.id === qid);
+    if (q) {
+      const el = timelineRef.current;
+      const midDate = new Date((toDate(q.startDate).getTime() + toDate(q.endDate).getTime()) / 2);
+      if (el) el.scrollTo({ left: xFor(midDate) - el.clientWidth / 2, behavior: 'smooth' });
+    }
+  }
+  function handleSelectSprint(sid: string, qid: string) {
+    setSelectedSprintId(sid);
+    setSelectedQuarterId(qid);
+    setFilterByPhase(sid);
+    const q = board.quarters.find(q => q.id === qid);
+    const s = q?.sprints.find(s => s.id === sid);
+    if (s) {
+      const el = timelineRef.current;
+      const mid = new Date((toDate(s.startDate).getTime() + toDate(s.endDate).getTime()) / 2);
+      if (el) el.scrollTo({ left: xFor(mid) - el.clientWidth / 2, behavior: 'smooth' });
+    }
+  }
+
+  // ── Scroll to TODAY on open ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen) return;
+    requestAnimationFrame(() => {
+      const el = timelineRef.current;
+      const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
+      if (el) el.scrollLeft = xFor(clamped) - el.clientWidth / 2;
+    });
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── ESC handler ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isOpen) return;
     const h = (e: KeyboardEvent) => {
@@ -982,37 +1226,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     return () => document.removeEventListener('keydown', h);
   }, [isOpen, onClose, showAddForm, selectedTag]);
 
-  // Scroll to TODAY on open (clamped so we never scroll past the timeline edges)
-  useEffect(() => {
-    if (!isOpen) return;
-    requestAnimationFrame(() => {
-      const el = timelineRef.current;
-        const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
-      if (el) el.scrollLeft = xFor(clamped) - el.clientWidth / 2;
-    });
-  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function scrollToToday() {
-    const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
-    const el = timelineRef.current;
-    if (el) el.scrollTo({ left: xFor(clamped) - el.clientWidth / 2, behavior: 'smooth' });
-  }
-
-  function handleSprintSelect(sprintId: string) {
-    const sprint = SPRINTS.find(s => s.id === sprintId);
-    setSelectedSprintId(sprintId);
-    setFilterByPhase(prev => prev === sprintId ? null : sprintId);
-    const scrollDate = sprint?.startDate ?? TODAY;
-    const el = timelineRef.current;
-    if (el) el.scrollTo({ left: xFor(scrollDate) - el.clientWidth / 2, behavior: 'smooth' });
-  }
-
-  function handlePhaseClick(i: number) {
-    const phaseId = board.phases[i]?.id;
-    if (phaseId) handleSprintSelect(phaseId);
-  }
-
-  // Derived: visible tags after filters
+  // ── Derived: visible tags ─────────────────────────────────────────────────
   const visibleTags = useMemo(() => {
     let filtered = tags.filter(t => activeFilters.includes(t.type));
     if (filterByPhase) filtered = filtered.filter(t => t.phase_id === filterByPhase);
@@ -1021,7 +1235,6 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
 
   const laned = useMemo(() => assignLanes(visibleTags, xFor), [visibleTags, pxPerDay]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Next milestone
   const nextMilestone = useMemo(() =>
     tags.filter(t => t.type === 'milestone' && (t.date || t.start_date))
       .filter(t => toDate(t.date ?? t.start_date!) > TODAY)
@@ -1030,7 +1243,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
 
   if (!isOpen) return null;
 
-  const conf    = CONFIDENCE_STYLE[board.confidence];
+  const conf     = CONFIDENCE_STYLE[board.confidence];
   const ConfIcon = conf.icon;
 
   return (
@@ -1051,15 +1264,16 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
         </div>
 
         {/* ── Header ─────────────────────────────────────────────────── */}
-        <div className="flex-none border-b border-gray-100 px-8 py-5">
+        <div className="flex-none border-b border-gray-100 px-6 py-4">
           <div className="flex items-start justify-between gap-4">
+            {/* Title + subtext + next milestone */}
             <div className="flex-1 min-w-0 space-y-0.5">
               <h2 className="text-xl font-semibold text-gray-900 tracking-tight leading-tight">
-                <EditableText value={board.title} onChange={v => patch('title', v)} className="text-xl font-semibold text-gray-900 tracking-tight" />
+                <EditableText value={board.title} onChange={v => patchBoard('title', v)} className="text-xl font-semibold text-gray-900 tracking-tight" />
               </h2>
               <p className="text-sm text-gray-500 flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5 flex-none" />
-                <EditableText value={board.subtext} onChange={v => patch('subtext', v)} className="text-sm text-gray-500" />
+                <EditableText value={board.subtext} onChange={v => patchBoard('subtext', v)} className="text-sm text-gray-500" />
               </p>
               {nextMilestone && (
                 <p className="text-xs text-gray-400 flex items-center gap-1.5 pt-0.5">
@@ -1070,32 +1284,26 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
               )}
             </div>
 
-            {/* Confidence pill */}
-            <button onClick={cycleConfidence} title="Click to cycle confidence"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border flex-none cursor-pointer hover:opacity-80 transition-opacity ${conf.pill}`}>
-              <ConfIcon className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium">Q1 Confidence</span>
-              <span className="text-xs">{board.confidence}</span>
-            </button>
-
-            <div className="flex items-center gap-1 flex-none">
-              <Button
-                variant="outline" size="sm"
-                onClick={handleExportPptx}
-                disabled={exporting}
-                className="h-8 text-xs gap-1.5 print:hidden text-gray-600 border-gray-200 hover:bg-gray-50"
-                title="Export as PowerPoint"
-              >
-                {exporting
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Download className="h-3.5 w-3.5" />
-                }
+            {/* Right: confidence + actions */}
+            <div className="flex items-center gap-2 flex-none">
+              {/* Confidence pill */}
+              <button onClick={cycleConfidence} title="Click to cycle confidence"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity text-xs font-medium ${conf.pill}`}>
+                <ConfIcon className="h-3.5 w-3.5" />
+                <span>{board.confidence}</span>
+              </button>
+              {/* Export PPTX */}
+              <Button variant="outline" size="sm" onClick={handleExportPptx} disabled={exporting}
+                className="h-8 text-xs gap-1.5 print:hidden text-gray-600 border-gray-200 hover:bg-gray-50">
+                {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 {exporting ? 'Exporting…' : 'Export PPTX'}
               </Button>
+              {/* Print */}
               <Button variant="ghost" size="sm" onClick={() => window.print()}
                 className="text-gray-400 hover:text-gray-600 print:hidden" title="Print">
                 <Printer className="h-4 w-4" />
               </Button>
+              {/* Close */}
               <Button variant="ghost" size="icon" onClick={onClose}
                 className="text-gray-400 hover:text-gray-600 print:hidden" aria-label="Close">
                 <X className="h-5 w-5" />
@@ -1107,31 +1315,57 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
         {/* ── Scrollable body ────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto">
 
-          {/* ── Timeline section ──────────────────────────────────── */}
-          <div className="px-8 pt-6 pb-2">
+          {/* ── Timeline Section ──────────────────────────────────────── */}
+          <div className="px-6 pt-5 pb-3">
 
-            {/* Section header row */}
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400">Program Timeline</h3>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={scrollToToday} className="text-xs h-7 print:hidden">
-                  Jump to Today
-                </Button>
-                {/* Zoom controls */}
-                <div className="flex items-center border border-gray-200 rounded-md overflow-hidden print:hidden">
+            {/* Toolbar */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400">Program Timeline</h3>
+                {/* View toggle */}
+                <div className="flex rounded-md border border-gray-200 overflow-hidden text-[11px]">
                   <button
-                    onClick={() => setPxPerDay(p => Math.max(4, p - 2))}
-                    disabled={pxPerDay <= 4}
+                    onClick={() => setViewMode('quarter')}
+                    className={`px-2.5 py-1 transition-colors ${viewMode === 'quarter' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                    Quarter
+                  </button>
+                  <button
+                    onClick={() => setViewMode('sprint')}
+                    className={`px-2.5 py-1 transition-colors border-l border-gray-200 ${viewMode === 'sprint' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                    Quarter + Sprint
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Jump to Today */}
+                <Button variant="outline" size="sm" onClick={scrollToToday} className="text-xs h-7 print:hidden">Jump to Today</Button>
+
+                {/* Zoom */}
+                <div className="flex items-center border border-gray-200 rounded-md overflow-hidden print:hidden">
+                  <button onClick={() => setPxPerDay(p => Math.max(4, p - 2))} disabled={pxPerDay <= 4}
                     className="px-2 h-7 text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm leading-none">−</button>
                   <span className="text-[10px] text-gray-400 w-10 text-center select-none">{Math.round(pxPerDay / PX_PER_DAY * 100)}%</span>
-                  <button
-                    onClick={() => setPxPerDay(p => Math.min(24, p + 2))}
-                    disabled={pxPerDay >= 24}
+                  <button onClick={() => setPxPerDay(p => Math.min(24, p + 2))} disabled={pxPerDay >= 24}
                     className="px-2 h-7 text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm leading-none">+</button>
                 </div>
+
+                {/* Add Quarter */}
+                <Button variant="outline" size="sm" onClick={addQuarter} className="h-7 text-xs gap-1 print:hidden text-gray-600">
+                  <Plus className="h-3 w-3" />Quarter
+                </Button>
+
+                {/* Add Sprint */}
+                {selectedQuarterId && (
+                  <Button variant="outline" size="sm" onClick={addSprint} className="h-7 text-xs gap-1 print:hidden text-gray-600">
+                    <Plus className="h-3 w-3" />Sprint
+                  </Button>
+                )}
+
+                {/* Add Tag */}
                 <Button size="sm" onClick={() => { setShowAddForm(true); setEditTag(null); }}
                   className="h-7 text-xs bg-gray-900 hover:bg-gray-700 text-white print:hidden gap-1">
-                  <Plus className="h-3 w-3" />Add Tag
+                  <Plus className="h-3 w-3" />Tag
                 </Button>
               </div>
             </div>
@@ -1160,259 +1394,353 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
               {filterByPhase && (
                 <button onClick={() => setFilterByPhase(null)}
                   className="ml-1 px-2 py-0.5 rounded-full text-[11px] bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1">
-                  {board.phases.find(p => p.id === filterByPhase)?.phase ?? SPRINTS.find(s => s.id === filterByPhase)?.phase}
+                  {allPhases.find(p => p.id === filterByPhase)?.phase ?? filterByPhase}
                   <X className="h-2.5 w-2.5" />
                 </button>
               )}
               {tagsLoading && <Loader2 className="h-3 w-3 text-gray-300 animate-spin ml-1" />}
             </div>
 
-            {/* Scrollable timeline track */}
+            {/* Timeline canvas - scrollable */}
             <div className="relative">
-              <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-10 z-10 bg-gradient-to-r from-white to-transparent" />
-              <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-10 z-10 bg-gradient-to-l from-white to-transparent" />
+              {/* Fade gradients */}
+              <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-8 z-10 bg-gradient-to-r from-white to-transparent" />
+              <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 z-10 bg-gradient-to-l from-white to-transparent" />
 
               <div ref={timelineRef} className="overflow-x-auto cursor-grab active:cursor-grabbing"
                 style={{ scrollbarWidth: 'thin' }}
                 onWheel={e => { if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) e.currentTarget.scrollLeft += e.deltaY; }}>
 
-                <div className="relative" style={{ width: totalWidth + 80, height: TRACK_HEIGHT + 40 }}>
+                <div className="relative" style={{ width: totalWidth + 80, height: CANVAS_H }}>
 
                   {/* Quarter background bands */}
-                  {QUARTERS.map(q => {
-                    const left  = xFor(q.start);
-                    const width = xFor(q.end) - left;
+                  {board.quarters.map(q => {
+                    const left = xFor(toDate(q.startDate));
+                    const width = xFor(toDate(q.endDate)) - left;
                     return (
-                      <div key={q.label} className="absolute" style={{ left, top: 0, width, height: TRACK_HEIGHT + 40, background: q.bg }}>
-                        <span className="absolute left-2 top-1 text-[9px] font-bold tracking-widest select-none" style={{ color: q.labelColor }}>{q.label}</span>
-                      </div>
+                      <div key={q.id} className="absolute"
+                        style={{ left, top: 0, width, height: CANVAS_H, background: `${q.color}14` }} />
                     );
                   })}
 
-                  {/* Month tick marks */}
+                  {/* Month tick lines */}
                   {MONTH_TICKS.map(mt => {
                     const x = xFor(mt.date);
                     return (
                       <div key={mt.label} className="absolute" style={{ left: x, top: 0 }}>
-                        <div className="w-px bg-gray-200/60" style={{ height: TRACK_HEIGHT + 40 }} />
-                        <div className="absolute top-1 left-1 text-[8px] text-gray-400/70 whitespace-nowrap font-medium select-none">{mt.label}</div>
+                        <div className="w-px bg-gray-200/50" style={{ height: CANVAS_H }} />
+                        <div className="absolute top-1 left-1.5 text-[8px] text-gray-400/60 font-medium select-none">{mt.label}</div>
                       </div>
                     );
                   })}
 
-                  {/* Sprint bars — clickable */}
-                  {SPRINTS.map(sprint => {
-                    const left     = xFor(sprint.startDate);
-                    const rawWidth = xFor(sprint.endDate) - left;
-                    const width    = Math.max(rawWidth, 6);
-                    const top      = sprint.barRow === 0 ? 22 : 40;
-                    const isSelected = selectedSprintId === sprint.id;
-                    const phase    = board.phases.find(p => p.id === sprint.id);
+                  {/* ── QUARTER BARS (Lane 1) ── */}
+                  {board.quarters.map(q => {
+                    const left = xFor(toDate(q.startDate));
+                    const rawW = xFor(toDate(q.endDate)) - left;
+                    const width = Math.max(rawW, 8);
+                    const isSelected = selectedQuarterId === q.id;
                     return (
-                      <div key={sprint.id}
-                        className={`absolute rounded cursor-pointer transition-all ${sprint.barColor} ${isSelected ? 'ring-2 ring-blue-400 ring-offset-1 opacity-100' : 'opacity-70 hover:opacity-90'}`}
-                        style={{ left, top, width, height: isSelected ? 18 : 14 }}
-                        onClick={() => handleSprintSelect(sprint.id)}
-                        title={phase?.phase ?? sprint.phase}>
-                        {width > 36 && (
-                          <span className="absolute inset-0 flex items-center px-1.5 text-[8px] font-semibold text-white/90 truncate leading-none select-none">
-                            {phase?.phase ?? sprint.phase}
-                          </span>
-                        )}
+                      <div key={q.id}
+                        className={`absolute rounded-lg cursor-pointer transition-all select-none group/qbar
+                          ${isSelected ? 'shadow-md' : 'opacity-80 hover:opacity-100 hover:shadow-sm'}`}
+                        style={{
+                          left, top: Q_BAR_TOP, width, height: Q_BAR_H,
+                          background: q.color,
+                          ...(isSelected ? { boxShadow: `0 0 0 2px white, 0 0 0 4px ${q.color}` } : {}),
+                        }}
+                        onClick={() => handleSelectQuarter(q.id)}
+                      >
+                        <div className="absolute inset-0 flex items-center px-3 gap-2 overflow-hidden">
+                          {width > 60 && (
+                            <span className="text-white font-semibold text-sm leading-none truncate flex-1">
+                              <EditableText
+                                value={q.label}
+                                onChange={v => patchQuarter(q.id, { label: v })}
+                                className="font-semibold text-sm text-white"
+                              />
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); if (window.confirm('Delete this quarter?')) deleteQuarter(q.id); }}
+                          className="absolute top-1 right-1 opacity-0 group-hover/qbar:opacity-100 text-white/60 hover:text-white/100 transition-opacity"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       </div>
                     );
                   })}
+
+                  {/* ── SPRINT BARS (Lane 2, only in sprint mode) ── */}
+                  {viewMode === 'sprint' && selectedQuarter && (() => {
+                    const sprintsWithRows = assignSprintRows(selectedQuarter.sprints);
+                    return sprintsWithRows.map(sprint => {
+                      const left = xFor(toDate(sprint.startDate));
+                      const rawW = Math.max(xFor(toDate(sprint.endDate)) - left, 6);
+                      const top = S_BAR_TOP[sprint.row];
+                      const isSelected = selectedSprintId === sprint.id;
+                      return (
+                        <div key={sprint.id}
+                          className={`absolute rounded-md cursor-pointer transition-all select-none group/sbar
+                            ${isSelected ? 'shadow-md' : 'opacity-75 hover:opacity-100'}`}
+                          style={{
+                            left, top, width: rawW, height: S_BAR_H,
+                            background: sprint.color,
+                            ...(isSelected ? { boxShadow: `0 0 0 2px white, 0 0 0 3px ${sprint.color}` } : {}),
+                          }}
+                          onClick={() => handleSelectSprint(sprint.id, selectedQuarter.id)}
+                        >
+                          <div className="absolute inset-0 flex items-center px-2 overflow-hidden">
+                            {rawW > 40 && (
+                              <span className="text-white/90 font-medium text-[11px] leading-none truncate">
+                                <EditableText
+                                  value={sprint.label}
+                                  onChange={v => patchSprint(selectedQuarter.id, sprint.id, { label: v })}
+                                  className="font-medium text-[11px] text-white/90"
+                                />
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={e => { e.stopPropagation(); deleteSprint(selectedQuarter.id, sprint.id); }}
+                            className="absolute top-0.5 right-0.5 opacity-0 group-hover/sbar:opacity-100 text-white/60 hover:text-white transition-opacity"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </div>
+                      );
+                    });
+                  })()}
 
                   {/* Baseline */}
-                  <div className="absolute left-0 right-0 bg-gray-300 rounded" style={{ top: 64, height: 1 }} />
+                  <div className="absolute left-0 bg-gray-200" style={{ top: BASELINE_Y, height: 1, width: totalWidth + 80 }} />
 
-                  {/* Range bars for range tags */}
+                  {/* Range tag bars */}
                   {visibleTags.filter(t => t.start_date && t.end_date).map(t => {
-                    const x1  = xFor(toDate(t.start_date!));
-                    const x2  = xFor(toDate(t.end_date!));
+                    const x1 = xFor(toDate(t.start_date!));
+                    const x2 = xFor(toDate(t.end_date!));
                     const cfg = TAG_CONFIG[t.type];
                     return (
-                      <div key={`range-${t.id}`} className={`absolute ${cfg.bg} border ${cfg.border} opacity-80 cursor-pointer`}
-                        style={{ left: x1, top: 61, width: Math.max(x2 - x1, 4), height: 5, borderRadius: 3 }}
+                      <div key={`range-${t.id}`}
+                        className={`absolute ${cfg.bg} border ${cfg.border} opacity-80 cursor-pointer`}
+                        style={{ left: x1, top: CHIP_ANCHOR_Y - 4, width: Math.max(x2 - x1, 4), height: 5, borderRadius: 3 }}
                         onClick={() => setSelectedTag(t)} title={t.title} />
                     );
                   })}
 
-                  {/* TODAY line */}
-                  <div className="absolute" style={{ left: xFor(TODAY) - 1, top: 0, width: 2, height: TRACK_HEIGHT + 40, background: 'rgba(59,130,246,0.14)' }} />
+                  {/* TODAY vertical line */}
+                  <div className="absolute" style={{ left: xFor(TODAY) - 1, top: 0, width: 2, height: CANVAS_H, background: 'rgba(59,130,246,0.15)' }} />
 
-                  {/* TODAY badge with ET date */}
-                  <div className="absolute flex flex-col items-center" style={{ left: xFor(TODAY), top: 66 }}>
-                    <div className="-translate-x-1/2 inline-flex flex-col items-center bg-blue-500 text-white rounded-full shadow px-2 py-0.5 gap-0">
-                      <span className="text-[8px] font-bold leading-tight tracking-wide">TODAY</span>
-                      <span className="text-[7px] leading-tight opacity-90">{TODAY_DISPLAY} ET</span>
-                    </div>
-                  </div>
-
-                  {/* MVP Launch marker */}
-                  <div className="absolute" style={{ left: xFor(toDate('2026-04-01')), top: 66 }}>
-                    <div className="-translate-x-1/2 inline-flex items-center bg-rose-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-full shadow whitespace-nowrap">
-                      🚀 Apr 1
+                  {/* TODAY badge */}
+                  <div className="absolute flex flex-col items-center" style={{ left: xFor(TODAY), top: CHIP_ANCHOR_Y }}>
+                    <div className="-translate-x-1/2 inline-flex flex-col items-center bg-blue-500 text-white rounded-full shadow px-2.5 py-1 gap-0">
+                      <span className="text-[9px] font-bold leading-tight tracking-wide">TODAY</span>
+                      <span className="text-[8px] leading-tight opacity-90">{TODAY_DISPLAY} ET</span>
                     </div>
                   </div>
 
                   {/* Tag chips */}
                   {laned.map(({ tag, x, lane }) => {
-                    const cfg    = TAG_CONFIG[tag.type];
-                    const Icon   = cfg.Icon;
-                    const laneY  = LANE_TOPS[lane];
-                    const connH  = laneY - 66;
-                    const isSelected = selectedTag?.id === tag.id;
+                    const cfg = TAG_CONFIG[tag.type];
+                    const Icon = cfg.Icon;
+                    const laneY = LANE_TOPS[lane];
+                    const connH = laneY - CHIP_ANCHOR_Y;
+                    const isTagSelected = selectedTag?.id === tag.id;
                     return (
-                      <div key={tag.id} className="absolute" style={{ left: x, top: 66 }}>
-                        {/* Connector line */}
-                        <div className={`absolute w-px ${isSelected ? cfg.dot : 'bg-gray-200'}`}
+                      <div key={tag.id} className="absolute" style={{ left: x, top: CHIP_ANCHOR_Y }}>
+                        <div className={`absolute w-px ${isTagSelected ? cfg.dot : 'bg-gray-200'}`}
                           style={{ left: 0, top: 0, height: connH }} />
-                        {/* Chip */}
-                        <div className={`absolute -translate-x-1/2 cursor-pointer transition-all hover:scale-105 ${isSelected ? 'scale-105' : ''}`}
+                        <div className={`absolute -translate-x-1/2 cursor-pointer transition-all hover:scale-105 ${isTagSelected ? 'scale-105' : ''}`}
                           style={{ top: connH }}
                           onClick={() => setSelectedTag(prev => prev?.id === tag.id ? null : tag)}>
-                          <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium border whitespace-nowrap shadow-sm ${cfg.bg} ${cfg.text} ${cfg.border} ${isSelected ? 'ring-2 ring-offset-1 ring-current shadow-md' : ''}`}>
+                          <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium border whitespace-nowrap shadow-sm ${cfg.bg} ${cfg.text} ${cfg.border} ${isTagSelected ? 'ring-2 ring-offset-1 ring-current' : ''}`}>
                             <Icon className="h-2.5 w-2.5 flex-none" />
-                            <span className="max-w-[72px] truncate">{tag.title}</span>
+                            <span className="max-w-[80px] truncate">{tag.title}</span>
                           </div>
                         </div>
                       </div>
                     );
                   })}
+
                 </div>
               </div>
             </div>
           </div>
 
-          {/* ── Phase Summary Table ──────────────────────────────── */}
-          <div className="px-8 mt-1">
+          {/* ── Bottom Panel ── */}
+          <div className="px-6 pb-8">
             <div className="border-t border-gray-100 mb-5" />
-            <div className="mb-6">
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
-                Phase Summary
-                <span className="ml-2 normal-case font-normal text-gray-300 text-[10px]">— click bar or row to select · click cell to edit</span>
-              </h3>
 
-              {/* Sprint detail card — shown for the currently selected sprint */}
-              {(() => {
-                const sprint   = SPRINTS.find(s => s.id === selectedSprintId);
-                const phaseIdx = board.phases.findIndex(p => p.id === selectedSprintId);
-                if (!sprint) return null;
-                return (
-                  <SprintDetailCard
-                    sprint={sprint}
-                    phase={board.phases[phaseIdx]}
-                    tags={tags}
-                    onPatchPhase={(field, value) => { if (phaseIdx >= 0) patchPhase(phaseIdx, field, value); }}
-                  />
-                );
-              })()}
-
-              <div className="overflow-x-auto rounded-lg border border-gray-100">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-100">
-                      {['Phase', 'Dates', 'Focus', 'Status', 'Tags'].map(col => (
-                        <th key={col} className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">{col}</th>
-                      ))}
-                      <th className="w-8" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {board.phases.map((row, i) => {
-                      const isHL = row.id === selectedSprintId;
-                      return (
-                        <tr key={row.id}
-                          className={`group border-b border-gray-50 transition-colors cursor-pointer ${isHL ? 'bg-blue-50/60 ring-1 ring-inset ring-blue-100' : i % 2 === 1 ? 'bg-gray-50/40' : ''}`}>
-                          <td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap cursor-pointer"
-                            onClick={() => handlePhaseClick(i)}>
-                            <EditableText value={row.phase} onChange={v => patchPhase(i, 'phase', v)}
-                              className="font-medium text-gray-800 text-sm" />
-                          </td>
-                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                            <EditableText value={row.dates} onChange={v => patchPhase(i, 'dates', v)} className="text-gray-500 text-sm" />
-                          </td>
-                          <td className="px-4 py-3 text-gray-600">
-                            <MarkdownFocusCell value={row.focus} onChange={v => patchPhase(i, 'focus', v)} />
-                          </td>
-                          <td className="px-4 py-3">
-                            <StatusDropdown value={row.status} onChange={v => patchPhase(i, 'status', v)} />
-                          </td>
-                          <td className="px-4 py-3">
-                            <PhaseTagCounts
-                            phaseId={row.id}
-                            tags={tags}
-                            onTagClick={tag => setSelectedTag(tag)}
-                            onPhaseClick={() => handlePhaseClick(i)}
-                          />
-                          </td>
-                          <td className="pr-3 py-3">
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                              <button onClick={() => movePhase(i, -1)} disabled={i === 0}
-                                title="Move up"
-                                className="p-1 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed">
-                                <ChevronUp className="h-3.5 w-3.5" />
-                              </button>
-                              <button onClick={() => movePhase(i, 1)} disabled={i === board.phases.length - 1}
-                                title="Move down"
-                                className="p-1 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed">
-                                <ChevronDown className="h-3.5 w-3.5" />
-                              </button>
-                              <button onClick={() => deletePhase(i)} title="Delete row"
-                                className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <button onClick={addPhase} className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-600 transition-colors px-1 py-1">
-                <Plus className="h-3.5 w-3.5" />Add phase
-              </button>
-            </div>
-
-            {/* ── PM Notes ────────────────────────────────────────── */}
-            <div className="border-t border-gray-100 mb-5" />
-            <div className="mb-6">
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">PM Walkthrough Notes</h3>
-              <div className="space-y-3">
-                {([
-                  { key: 'accomplished' as const, placeholder: 'What we accomplished this phase…' },
-                  { key: 'remaining'    as const, placeholder: 'What is left for Q1…'             },
-                  { key: 'risks'        as const, placeholder: 'Risks / dependencies…'            },
-                ]).map(({ key, placeholder }) => (
-                  <div key={key} className="flex gap-3 items-start">
-                    <ChevronRight className="h-4 w-4 text-gray-300 mt-2.5 flex-none" />
-                    <textarea
-                      className="flex-1 text-sm text-gray-700 placeholder-gray-300 border border-gray-100 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-1 focus:ring-blue-200 focus:border-blue-300 bg-gray-50/50 min-h-[52px]"
-                      placeholder={placeholder}
-                      value={board.notes[key]}
-                      onChange={e => setBoard(prev => ({ ...prev, notes: { ...prev.notes, [key]: e.target.value } }))}
-                      onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; }} />
+            {selectedSprint ? (
+              /* Sprint detail panel */
+              <div className="space-y-4">
+                {/* Summary card */}
+                <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100"
+                    style={{ borderLeft: `4px solid ${selectedSprint.color}` }}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-900 truncate">
+                          <EditableText value={selectedSprint.label}
+                            onChange={v => patchSprint(selectedQuarterId!, selectedSprint.id, { label: v })}
+                            className="text-sm font-semibold text-gray-900" />
+                        </p>
+                        <span className="text-xs text-gray-400 flex-none">
+                          {fmtDate(selectedSprint.startDate)} – {fmtDate(selectedSprint.endDate)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Sprint · {selectedQuarter?.label}
+                      </p>
+                    </div>
+                    <StatusDropdown value={selectedSprint.status}
+                      onChange={v => patchSprint(selectedQuarterId!, selectedSprint.id, { status: v })} />
+                    {/* Sprint date editing */}
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <input type="date" value={selectedSprint.startDate}
+                        onChange={e => patchSprint(selectedQuarterId!, selectedSprint.id, { startDate: e.target.value })}
+                        className="border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                      <span>→</span>
+                      <input type="date" value={selectedSprint.endDate}
+                        onChange={e => patchSprint(selectedQuarterId!, selectedSprint.id, { endDate: e.target.value })}
+                        className="border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                    </div>
                   </div>
-                ))}
+                  {/* Tags summary */}
+                  {(() => {
+                    const st = tags.filter(t => t.phase_id === selectedSprint.id);
+                    const byType: Partial<Record<TagType, number>> = {};
+                    for (const t of st) { byType[t.type] = (byType[t.type] ?? 0) + 1; }
+                    return Object.entries(byType).length > 0 ? (
+                      <div className="px-4 py-2.5 flex flex-wrap gap-1.5">
+                        {(Object.entries(byType) as [TagType, number][]).map(([type, count]) => {
+                          const cfg = TAG_CONFIG[type];
+                          const Icon = cfg.Icon;
+                          return (
+                            <span key={type} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg} ${cfg.text}`}>
+                              <Icon className="h-2.5 w-2.5" />{count} {cfg.label}{count > 1 ? 's' : ''}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+
+                {/* Planning grid */}
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-widest text-gray-400">Planning Grid</h4>
+                </div>
+                <FlexGrid
+                  data={selectedSprint.grid}
+                  onChange={g => patchSprint(selectedQuarterId!, selectedSprint.id, { grid: g })}
+                />
+
+                {/* Notes */}
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">Notes</h4>
+                  <textarea
+                    className="w-full text-sm text-gray-700 placeholder-gray-300 border border-gray-100 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-1 focus:ring-blue-200 bg-gray-50/50 min-h-[80px]"
+                    placeholder="Sprint notes, context, decisions…"
+                    value={selectedSprint.notes}
+                    onChange={e => patchSprint(selectedQuarterId!, selectedSprint.id, { notes: e.target.value })}
+                    onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; }}
+                  />
+                </div>
               </div>
-            </div>
 
-            {/* ── Footer ──────────────────────────────────────────── */}
-            <div className="border-t border-gray-100 mb-5" />
-            <div className="mb-8 px-4 py-3 bg-gray-50 rounded-lg border border-gray-100">
-              <EditableText value={board.footer} onChange={v => patch('footer', v)} className="text-sm text-gray-600 leading-relaxed" multiline />
-            </div>
+            ) : selectedQuarter ? (
+              /* Quarter detail panel */
+              <div className="space-y-4">
+                {/* Summary card */}
+                <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100"
+                    style={{ borderLeft: `4px solid ${selectedQuarter.color}` }}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900">
+                        <EditableText value={selectedQuarter.label}
+                          onChange={v => patchQuarter(selectedQuarter.id, { label: v })}
+                          className="text-sm font-semibold text-gray-900" />
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {fmtDate(selectedQuarter.startDate)} – {fmtDate(selectedQuarter.endDate)} · {selectedQuarter.sprints.length} sprint{selectedQuarter.sprints.length !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                    {/* Quarter date editing */}
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <input type="date" value={selectedQuarter.startDate}
+                        onChange={e => patchQuarter(selectedQuarter.id, { startDate: e.target.value })}
+                        className="border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                      <span>→</span>
+                      <input type="date" value={selectedQuarter.endDate}
+                        onChange={e => patchQuarter(selectedQuarter.id, { endDate: e.target.value })}
+                        className="border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" />
+                    </div>
+                  </div>
+                  {/* Sprint chips for this quarter */}
+                  {selectedQuarter.sprints.length > 0 && (
+                    <div className="px-4 py-2.5 flex flex-wrap gap-1.5">
+                      {selectedQuarter.sprints.map(s => (
+                        <button key={s.id}
+                          onClick={() => handleSelectSprint(s.id, selectedQuarter.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors hover:opacity-80"
+                          style={{ background: `${s.color}33`, borderColor: s.color, color: '#1f2937' }}>
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Planning grid */}
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">Planning Grid</h4>
+                  <FlexGrid
+                    data={selectedQuarter.grid}
+                    onChange={g => patchQuarter(selectedQuarter.id, { grid: g })}
+                  />
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">Notes</h4>
+                  <textarea
+                    className="w-full text-sm text-gray-700 placeholder-gray-300 border border-gray-100 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-1 focus:ring-blue-200 bg-gray-50/50 min-h-[80px]"
+                    placeholder="Quarter overview, goals, key decisions…"
+                    value={selectedQuarter.notes}
+                    onChange={e => patchQuarter(selectedQuarter.id, { notes: e.target.value })}
+                    onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; }}
+                  />
+                </div>
+              </div>
+
+            ) : (
+              /* Empty state */
+              <div className="flex flex-col items-center justify-center py-10 text-center">
+                <p className="text-sm text-gray-400">Select a quarter or sprint from the timeline above</p>
+                <p className="text-xs text-gray-300 mt-1">Click a bar to view and edit its details here</p>
+              </div>
+            )}
+
+            {/* Footer */}
+            {board.footer && (
+              <>
+                <div className="border-t border-gray-100 mt-6 mb-4" />
+                <div className="px-4 py-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <EditableText value={board.footer} onChange={v => patchBoard('footer', v)}
+                    className="text-sm text-gray-600 leading-relaxed" multiline />
+                </div>
+              </>
+            )}
           </div>
-
         </div>
 
-        {/* Tag detail sub-panel — absolute within the drawer, outside the scrollable body */}
+        {/* Tag detail sub-panel */}
         {selectedTag && (
           <TagDetailPanel
             tag={selectedTag}
-            phases={board.phases}
+            phases={allPhases}
             onClose={() => setSelectedTag(null)}
             onEdit={openEditForm}
             onDelete={deleteTag}
@@ -1424,7 +1752,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
       {showAddForm && (
         <AddTagForm
           initial={editTag}
-          phases={board.phases}
+          phases={allPhases}
           onSave={saveTag}
           onClose={() => { setShowAddForm(false); setEditTag(null); }}
         />
