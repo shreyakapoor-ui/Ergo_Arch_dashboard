@@ -86,7 +86,7 @@ const PX_PER_DAY     = 8;
 function daysBetween(a: Date, b: Date) {
   return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 }
-function xFor(date: Date) { return daysBetween(TIMELINE_START, date) * PX_PER_DAY; }
+// xFor is shadowed inside the component with a zoom-reactive version (see pxPerDay state)
 /** Parse a YYYY-MM-DD string as local noon to avoid UTC-offset day-shift bugs. */
 function toDate(s: string): Date {
   return new Date(s.length === 10 ? s + 'T12:00:00' : s);
@@ -127,19 +127,6 @@ const TODAY_DISPLAY = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', month: 'short', day: 'numeric',
 }).format(new Date());
 
-/**
- * x-pixel position for "today", clamped to the visible timeline range.
- * Used for scroll centering so the view doesn't scroll past the timeline edges
- * when the current date is before the programme start or after its end.
- */
-function todayX() {
-  const clamped =
-    TODAY < TIMELINE_START ? TIMELINE_START :
-    TODAY > TIMELINE_END   ? TIMELINE_END   : TODAY;
-  return xFor(clamped);
-}
-
-const TOTAL_WIDTH = daysBetween(TIMELINE_START, TIMELINE_END) * PX_PER_DAY;
 const TRACK_HEIGHT = 220;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +176,7 @@ const LANE_TOPS = [130, 158, 186];
 // Tag lane assignment
 // ─────────────────────────────────────────────────────────────────────────────
 
-function assignLanes(items: TimelineItem[]) {
+function assignLanes(items: TimelineItem[], xFn: (d: Date) => number) {
   const filtered = items.filter(t => t.date || t.start_date);
   const sorted = [...filtered].sort((a, b) =>
     toDate(a.date ?? a.start_date!).getTime() - toDate(b.date ?? b.start_date!).getTime()
@@ -197,7 +184,7 @@ function assignLanes(items: TimelineItem[]) {
   const CHIP_W = 115;
   const laneRight = [-1000, -1000, -1000];
   return sorted.map(tag => {
-    const x = xFor(toDate(tag.date ?? tag.start_date!));
+    const x = xFn(toDate(tag.date ?? tag.start_date!));
     let lane = 0;
     for (let i = 0; i < 3; i++) {
       if (x > laneRight[i] + 6) { lane = i; break; }
@@ -842,7 +829,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   async function handleExportPptx() {
     setExporting(true);
     try {
-      await generateTimelinePptx(board, tags);
+      await generateTimelinePptx({ ...board, milestones: [] }, tags);
     } finally {
       setExporting(false);
     }
@@ -950,6 +937,12 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
   const [editTag,          setEditTag]          = useState<FormDraft | null>(null);
   const [selectedSprintId, setSelectedSprintId] = useState<string>(DEFAULT_SPRINT_ID);
   const [filterByPhase,    setFilterByPhase]    = useState<string | null>(null);
+  const [pxPerDay,         setPxPerDay]         = useState(PX_PER_DAY);
+
+  // Zoom-reactive geometry — shadows module-level xFor and TOTAL_WIDTH
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  const xFor = (date: Date) => daysBetween(TIMELINE_START, date) * pxPerDay;
+  const totalWidth = daysBetween(TIMELINE_START, TIMELINE_END) * pxPerDay;
 
   function openEditForm(tag: TimelineItem) {
     const draft: FormDraft & { _editId: string } = {
@@ -994,13 +987,15 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     if (!isOpen) return;
     requestAnimationFrame(() => {
       const el = timelineRef.current;
-      if (el) el.scrollLeft = todayX() - el.clientWidth / 2;
+        const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
+      if (el) el.scrollLeft = xFor(clamped) - el.clientWidth / 2;
     });
-  }, [isOpen]);
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function scrollToToday() {
+    const clamped = TODAY < TIMELINE_START ? TIMELINE_START : TODAY > TIMELINE_END ? TIMELINE_END : TODAY;
     const el = timelineRef.current;
-    if (el) el.scrollTo({ left: todayX() - el.clientWidth / 2, behavior: 'smooth' });
+    if (el) el.scrollTo({ left: xFor(clamped) - el.clientWidth / 2, behavior: 'smooth' });
   }
 
   function handleSprintSelect(sprintId: string) {
@@ -1024,7 +1019,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
     return filtered;
   }, [tags, activeFilters, filterByPhase]);
 
-  const laned = useMemo(() => assignLanes(visibleTags), [visibleTags]);
+  const laned = useMemo(() => assignLanes(visibleTags, xFor), [visibleTags, pxPerDay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Next milestone
   const nextMilestone = useMemo(() =>
@@ -1122,6 +1117,18 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                 <Button variant="outline" size="sm" onClick={scrollToToday} className="text-xs h-7 print:hidden">
                   Jump to Today
                 </Button>
+                {/* Zoom controls */}
+                <div className="flex items-center border border-gray-200 rounded-md overflow-hidden print:hidden">
+                  <button
+                    onClick={() => setPxPerDay(p => Math.max(4, p - 2))}
+                    disabled={pxPerDay <= 4}
+                    className="px-2 h-7 text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm leading-none">−</button>
+                  <span className="text-[10px] text-gray-400 w-10 text-center select-none">{Math.round(pxPerDay / PX_PER_DAY * 100)}%</span>
+                  <button
+                    onClick={() => setPxPerDay(p => Math.min(24, p + 2))}
+                    disabled={pxPerDay >= 24}
+                    className="px-2 h-7 text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm leading-none">+</button>
+                </div>
                 <Button size="sm" onClick={() => { setShowAddForm(true); setEditTag(null); }}
                   className="h-7 text-xs bg-gray-900 hover:bg-gray-700 text-white print:hidden gap-1">
                   <Plus className="h-3 w-3" />Add Tag
@@ -1169,7 +1176,7 @@ export function ExecutiveTimeline({ isOpen, onClose }: ExecutiveTimelineProps) {
                 style={{ scrollbarWidth: 'thin' }}
                 onWheel={e => { if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) e.currentTarget.scrollLeft += e.deltaY; }}>
 
-                <div className="relative" style={{ width: TOTAL_WIDTH + 80, height: TRACK_HEIGHT + 40 }}>
+                <div className="relative" style={{ width: totalWidth + 80, height: TRACK_HEIGHT + 40 }}>
 
                   {/* Quarter background bands */}
                   {QUARTERS.map(q => {
