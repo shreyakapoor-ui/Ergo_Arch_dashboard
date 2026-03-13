@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Printer, Calendar, TrendingUp, TrendingDown, Minus,
-  ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
+  ChevronDown, Pencil, Plus, Trash2,
   Flag, AlertTriangle, GitBranch, Link2, Shuffle, Globe, Ban,
   ArrowRight, Loader2, Download, GripVertical,
 } from 'lucide-react';
@@ -531,9 +531,14 @@ function PhaseTagCounts({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) => void }) {
-  const [editCell, setEditCell] = useState<{ r: string; c: string } | null>(null);
-  const [editColId, setEditColId] = useState<string | null>(null);
+  const [editCell,      setEditCell]      = useState<{ r: string; c: string } | null>(null);
+  const [editColId,     setEditColId]     = useState<string | null>(null);
+  const [dragRowId,     setDragRowId]     = useState<string | null>(null);
+  const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
+  const [dragColId,     setDragColId]     = useState<string | null>(null);
+  const [dragOverColId, setDragOverColId] = useState<string | null>(null);
 
+  // ── Row helpers ────────────────────────────────────────────────────────────
   function addRow() {
     const id = `r${Date.now()}`;
     const cells: Record<string, string> = {};
@@ -541,18 +546,21 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
     onChange({ ...data, rows: [...data.rows, { id, cells }] });
   }
   function deleteRow(rid: string) { onChange({ ...data, rows: data.rows.filter(r => r.id !== rid) }); }
-  function moveRow(rid: string, dir: -1 | 1) {
-    const idx = data.rows.findIndex(r => r.id === rid);
-    if (idx < 0) return;
-    const rows = [...data.rows];
-    const j = idx + dir;
-    if (j < 0 || j >= rows.length) return;
-    [rows[idx], rows[j]] = [rows[j], rows[idx]];
-    onChange({ ...data, rows });
-  }
   function updateCell(rid: string, cid: string, val: string) {
     onChange({ ...data, rows: data.rows.map(r => r.id === rid ? { ...r, cells: { ...r.cells, [cid]: val } } : r) });
   }
+  function reorderRow(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const rows = [...data.rows];
+    const from = rows.findIndex(r => r.id === fromId);
+    const to   = rows.findIndex(r => r.id === toId);
+    if (from < 0 || to < 0) return;
+    const [moved] = rows.splice(from, 1);
+    rows.splice(to, 0, moved);
+    onChange({ ...data, rows });
+  }
+
+  // ── Column helpers ─────────────────────────────────────────────────────────
   function addColumn() {
     const id = `c${Date.now()}`;
     onChange({
@@ -570,14 +578,15 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
       rows: data.rows.map(r => { const cells = { ...r.cells }; delete cells[cid]; return { ...r, cells }; }),
     });
   }
-  function moveCol(cid: string, dir: -1 | 1) {
-    const idx = data.columns.findIndex(c => c.id === cid);
-    if (idx < 0) return;
-    const j = idx + dir;
-    if (j < 0 || j >= data.columns.length) return;
-    const columns = [...data.columns];
-    [columns[idx], columns[j]] = [columns[j], columns[idx]];
-    onChange({ ...data, columns });
+  function reorderCol(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const cols = [...data.columns];
+    const from = cols.findIndex(c => c.id === fromId);
+    const to   = cols.findIndex(c => c.id === toId);
+    if (from < 0 || to < 0) return;
+    const [moved] = cols.splice(from, 1);
+    cols.splice(to, 0, moved);
+    onChange({ ...data, columns: cols });
   }
 
   return (
@@ -585,33 +594,37 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-gray-50 border-b border-gray-100">
-            {data.columns.map((col, ci) => (
-              <th key={col.id} className="px-3 py-2 text-left font-medium text-gray-500 text-xs">
-                <div className="group/col flex items-center gap-0.5">
+            <th className="w-6" />{/* aligns with row grip handles */}
+            {data.columns.map(col => (
+              <th key={col.id}
+                draggable
+                onDragStart={e => { e.stopPropagation(); setDragColId(col.id); e.dataTransfer.effectAllowed = 'move'; }}
+                onDragOver={e  => { e.preventDefault(); if (dragColId && dragColId !== col.id) setDragOverColId(col.id); }}
+                onDragLeave={() => setDragOverColId(null)}
+                onDrop={e      => { e.preventDefault(); if (dragColId) reorderCol(dragColId, col.id); setDragColId(null); setDragOverColId(null); }}
+                onDragEnd={()  => { setDragColId(null); setDragOverColId(null); }}
+                className={`px-3 py-2 text-left font-medium text-xs select-none transition-all
+                  ${dragColId === col.id ? 'opacity-30 bg-blue-50' : 'text-gray-500'}
+                  ${dragOverColId === col.id ? 'border-l-2 border-blue-400 bg-blue-50' : ''}`}
+                style={{ cursor: 'grab' }}
+              >
+                <div className="group/col flex items-center gap-1 min-w-[60px]">
+                  <GripVertical className="h-3 w-3 text-gray-300 flex-none" style={{ transform: 'rotate(90deg)' }} />
                   {editColId === col.id
                     ? <input autoFocus value={col.label}
                         onChange={e => renameCol(col.id, e.target.value)}
                         onBlur={() => setEditColId(null)}
                         onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditColId(null); }}
-                        className="w-full bg-transparent outline-none border-b border-blue-300 text-xs font-medium" />
-                    : <span onClick={() => setEditColId(col.id)} className="cursor-pointer hover:text-gray-700 uppercase tracking-wide flex-1">{col.label}</span>
+                        className="flex-1 bg-transparent outline-none border-b border-blue-300 text-xs font-medium" />
+                    : <span onClick={e => { e.stopPropagation(); setEditColId(col.id); }}
+                        className="flex-1 cursor-text hover:text-gray-700 uppercase tracking-wide">{col.label}</span>
                   }
-                  <div className="opacity-0 group-hover/col:opacity-100 flex items-center gap-0 transition-opacity flex-none">
-                    <button onClick={() => moveCol(col.id, -1)} disabled={ci === 0}
-                      className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-gray-600 disabled:opacity-20 transition-colors">
-                      <ChevronLeft className="h-2.5 w-2.5" />
+                  {data.columns.length > 1 && (
+                    <button onClick={e => { e.stopPropagation(); deleteCol(col.id); }}
+                      className="opacity-0 group-hover/col:opacity-100 p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-red-400 flex-none transition-opacity">
+                      <X className="h-2.5 w-2.5" />
                     </button>
-                    <button onClick={() => moveCol(col.id, 1)} disabled={ci === data.columns.length - 1}
-                      className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-gray-600 disabled:opacity-20 transition-colors">
-                      <ChevronRight className="h-2.5 w-2.5" />
-                    </button>
-                    {data.columns.length > 1 && (
-                      <button onClick={() => deleteCol(col.id)}
-                        className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-red-400 transition-colors">
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </th>
             ))}
@@ -620,12 +633,25 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </th>
-            <th className="w-20" />
+            <th className="w-10" />
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((row, ri) => (
-            <tr key={row.id} className="group/row border-b border-gray-50 hover:bg-blue-50/30 transition-colors">
+          {data.rows.map(row => (
+            <tr key={row.id}
+              draggable
+              onDragStart={e => { setDragRowId(row.id); e.dataTransfer.effectAllowed = 'move'; }}
+              onDragOver={e  => { e.preventDefault(); if (dragRowId && dragRowId !== row.id) setDragOverRowId(row.id); }}
+              onDragLeave={() => setDragOverRowId(null)}
+              onDrop={e      => { e.preventDefault(); if (dragRowId) reorderRow(dragRowId, row.id); setDragRowId(null); setDragOverRowId(null); }}
+              onDragEnd={()  => { setDragRowId(null); setDragOverRowId(null); }}
+              className={`group/row border-b border-gray-50 transition-all
+                ${dragRowId === row.id ? 'opacity-30' : 'hover:bg-blue-50/30'}
+                ${dragOverRowId === row.id && dragRowId !== row.id ? 'border-t-2 border-blue-400 bg-blue-50/30' : ''}`}
+            >
+              <td className="w-6 pl-2" style={{ cursor: 'grab' }}>
+                <GripVertical className="h-3.5 w-3.5 text-gray-300 hover:text-gray-500 transition-colors" />
+              </td>
               {data.columns.map(col => (
                 <td key={col.id} className="px-3 py-2" onClick={() => setEditCell({ r: row.id, c: col.id })}>
                   {editCell?.r === row.id && editCell?.c === col.id
@@ -639,24 +665,17 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
                 </td>
               ))}
               <td className="w-8" />
-              <td className="pr-2 py-1 w-20">
-                <div className="opacity-0 group-hover/row:opacity-100 flex items-center gap-0.5 justify-end transition-opacity">
-                  <button onClick={() => moveRow(row.id, -1)} disabled={ri === 0} className="p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 transition-colors">
-                    <ChevronUp className="h-3 w-3" />
-                  </button>
-                  <button onClick={() => moveRow(row.id, 1)} disabled={ri === data.rows.length - 1} className="p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 disabled:opacity-20 transition-colors">
-                    <ChevronDown className="h-3 w-3" />
-                  </button>
-                  <button onClick={() => deleteRow(row.id)} className="p-0.5 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors">
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
+              <td className="pr-2 py-1 w-10">
+                <button onClick={() => deleteRow(row.id)}
+                  className="opacity-0 group-hover/row:opacity-100 p-0.5 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 transition-all">
+                  <Trash2 className="h-3 w-3" />
+                </button>
               </td>
             </tr>
           ))}
           {data.rows.length === 0 && (
             <tr>
-              <td colSpan={data.columns.length + 2} className="px-3 py-4 text-center text-xs text-gray-300">
+              <td colSpan={data.columns.length + 3} className="px-3 py-5 text-center text-xs text-gray-300">
                 No rows yet — click + Add row to start
               </td>
             </tr>
