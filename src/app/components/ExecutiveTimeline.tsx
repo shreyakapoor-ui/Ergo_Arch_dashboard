@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Printer, Calendar, TrendingUp, TrendingDown, Minus,
-  ChevronRight, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
+  ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Pencil, Plus, Trash2,
   Flag, AlertTriangle, GitBranch, Link2, Shuffle, Globe, Ban,
   ArrowRight, Loader2, Download, GripVertical,
 } from 'lucide-react';
@@ -570,28 +570,48 @@ function FlexGrid({ data, onChange }: { data: GridData; onChange: (d: GridData) 
       rows: data.rows.map(r => { const cells = { ...r.cells }; delete cells[cid]; return { ...r, cells }; }),
     });
   }
+  function moveCol(cid: string, dir: -1 | 1) {
+    const idx = data.columns.findIndex(c => c.id === cid);
+    if (idx < 0) return;
+    const j = idx + dir;
+    if (j < 0 || j >= data.columns.length) return;
+    const columns = [...data.columns];
+    [columns[idx], columns[j]] = [columns[j], columns[idx]];
+    onChange({ ...data, columns });
+  }
 
   return (
     <div className="rounded-lg border border-gray-100 overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-gray-50 border-b border-gray-100">
-            {data.columns.map(col => (
+            {data.columns.map((col, ci) => (
               <th key={col.id} className="px-3 py-2 text-left font-medium text-gray-500 text-xs">
-                <div className="group/col flex items-center gap-1">
+                <div className="group/col flex items-center gap-0.5">
                   {editColId === col.id
                     ? <input autoFocus value={col.label}
                         onChange={e => renameCol(col.id, e.target.value)}
                         onBlur={() => setEditColId(null)}
                         onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditColId(null); }}
                         className="w-full bg-transparent outline-none border-b border-blue-300 text-xs font-medium" />
-                    : <span onClick={() => setEditColId(col.id)} className="cursor-pointer hover:text-gray-700 uppercase tracking-wide">{col.label}</span>
+                    : <span onClick={() => setEditColId(col.id)} className="cursor-pointer hover:text-gray-700 uppercase tracking-wide flex-1">{col.label}</span>
                   }
-                  {data.columns.length > 1 && (
-                    <button onClick={() => deleteCol(col.id)} className="opacity-0 group-hover/col:opacity-100 ml-auto text-gray-300 hover:text-red-400 flex-none transition-opacity">
-                      <X className="h-2.5 w-2.5" />
+                  <div className="opacity-0 group-hover/col:opacity-100 flex items-center gap-0 transition-opacity flex-none">
+                    <button onClick={() => moveCol(col.id, -1)} disabled={ci === 0}
+                      className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-gray-600 disabled:opacity-20 transition-colors">
+                      <ChevronLeft className="h-2.5 w-2.5" />
                     </button>
-                  )}
+                    <button onClick={() => moveCol(col.id, 1)} disabled={ci === data.columns.length - 1}
+                      className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-gray-600 disabled:opacity-20 transition-colors">
+                      <ChevronRight className="h-2.5 w-2.5" />
+                    </button>
+                    {data.columns.length > 1 && (
+                      <button onClick={() => deleteCol(col.id)}
+                        className="p-0.5 rounded hover:bg-gray-200 text-gray-300 hover:text-red-400 transition-colors">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </th>
             ))}
