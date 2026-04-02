@@ -72,6 +72,20 @@ export function ArchitectureControls({
               </Button>
             </a>
 
+            <a
+              href="https://cc-dev.ergo.net/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-indigo-50 border-indigo-300 hover:bg-indigo-100"
+              >
+                <ExternalLink className="h-4 w-4 mr-2" /> Command Center
+              </Button>
+            </a>
+
             <Button
               variant="outline"
               size="sm"
